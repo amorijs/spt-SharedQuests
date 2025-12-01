@@ -30,6 +30,7 @@ Config menu:
 
 - SPT 4.0.x
 - Both server and client mods must be installed
+- Download the latest [release](https://github.com/amorijs/spt-SharedQuests/releases)
 
 ### Server Mod
 
