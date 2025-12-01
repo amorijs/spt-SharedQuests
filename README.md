@@ -30,23 +30,12 @@ Config menu:
 
 - SPT 4.0.x
 - Both server and client mods must be installed
+
+### Instructions
+
 - Download the latest [release](https://github.com/amorijs/spt-SharedQuests/releases)
-
-### Server Mod
-
-Copy `SharedQuestsBackend.dll` to:
-
-```
-SPT/user/mods/SharedQuestsBackend/
-```
-
-### Client Mod
-
-Copy `SharedQuests.dll` to:
-
-```
-BepInEx/plugins/SharedQuests/
-```
+- Drag the contents of the zip file into your SPT directory
+- You can verify installation was successful by making sure `SPT/user/mods/SharedQuestsBackend/SharedQuestsBackend.dll` and `BepInEx/plugins/SharedQuests/SharedQuests.dll` both exist
 
 ## Configuration
 
