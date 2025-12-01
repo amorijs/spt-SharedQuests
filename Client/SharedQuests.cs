@@ -16,14 +16,23 @@ using UnityEngine.UI;
 
 namespace SharedQuests
 {
+    /// <summary>
+    /// Quest status info from server
+    /// </summary>
+    public class QuestStatusInfo
+    {
+        public int Status { get; set; }
+        public string LockedReason { get; set; }
+    }
+
     [BepInPlugin("com.sharedquests.client", "SharedQuests", "1.0.0")]
     public class Plugin : BaseUnityPlugin
     {
         public static ManualLogSource LogSource;
         public static Plugin Instance;
         
-        // Cache: ProfileName -> { QuestId -> StatusInt }
-        public static Dictionary<string, Dictionary<string, int>> QuestStatuses = new Dictionary<string, Dictionary<string, int>>();
+        // Cache: ProfileName -> { QuestId -> QuestStatusInfo }
+        public static Dictionary<string, Dictionary<string, QuestStatusInfo>> QuestStatuses = new Dictionary<string, Dictionary<string, QuestStatusInfo>>();
         public static DateTime LastFetch = DateTime.MinValue;
         public const int CacheDurationSeconds = 5;
         
@@ -88,7 +97,7 @@ namespace SharedQuests
                 
                 if (!string.IsNullOrEmpty(response))
                 {
-                    var data = JsonConvert.DeserializeObject<Dictionary<string, Dictionary<string, int>>>(response);
+                    var data = JsonConvert.DeserializeObject<Dictionary<string, Dictionary<string, QuestStatusInfo>>>(response);
                     if (data != null)
                     {
                         QuestStatuses = data;
@@ -198,14 +207,29 @@ namespace SharedQuests
                 
                 var quests = kvp.Value;
                 int status = 0;
-                if (quests.TryGetValue(questId, out var s))
+                string lockedReason = null;
+                
+                if (quests.TryGetValue(questId, out var statusInfo))
                 {
-                    status = s;
+                    status = statusInfo.Status;
+                    lockedReason = statusInfo.LockedReason;
                 }
                 
                 var statusName = GetStatusName(status);
                 var statusColor = GetStatusColor(status);
-                lines.Add($"<color=#CCCCCC>{profileName}:</color> <color={statusColor}>{statusName}</color>");
+                
+                // Add locked reason if available (status 0 = Locked)
+                string statusDisplay;
+                if (status == 0 && !string.IsNullOrEmpty(lockedReason))
+                {
+                    statusDisplay = $"<color={statusColor}>{statusName}</color> <color=#666666>({lockedReason})</color>";
+                }
+                else
+                {
+                    statusDisplay = $"<color={statusColor}>{statusName}</color>";
+                }
+                
+                lines.Add($"<color=#CCCCCC>{profileName}:</color> {statusDisplay}");
                 visibleCount++;
             }
 

@@ -31,6 +31,15 @@ public record ModMetadata : AbstractModMetadata
 }
 
 /// <summary>
+/// Quest status info returned by the API
+/// </summary>
+public class QuestStatusInfo
+{
+    public int Status { get; set; }
+    public string? LockedReason { get; set; }
+}
+
+/// <summary>
 /// HTTP Router for real-time quest status endpoint
 /// </summary>
 [Injectable]
@@ -90,12 +99,15 @@ public class SharedQuestsRouter : StaticRouter
                 if (firstQuestId != null)
                 {
                     var statuses = freshData.Select(kv => 
-                        $"{kv.Key}={(QuestStatusEnum)(kv.Value.TryGetValue(firstQuestId, out var s) ? s : 0)}");
+                    {
+                        kv.Value.TryGetValue(firstQuestId, out var info);
+                        return $"{kv.Key}={(QuestStatusEnum)(info?.Status ?? 0)}";
+                    });
                     _logger?.Debug($"[SharedQuests] Quest {firstQuestId.Substring(0, 12)}... status: {string.Join(", ", statuses)}");
                 }
             }
             
-            return new ValueTask<string>(_jsonUtil!.Serialize(freshData ?? new Dictionary<string, Dictionary<string, int>>())!);
+            return new ValueTask<string>(_jsonUtil!.Serialize(freshData ?? new Dictionary<string, Dictionary<string, QuestStatusInfo>>())!);
         }
         catch (Exception ex)
         {
@@ -135,6 +147,9 @@ public class SharedQuestsServer(
     // Path to profiles directory (relative to SPT root)
     private const string ProfilesPath = "user/profiles";
     
+    // Cache quest prerequisites (questId -> list of prerequisite quest names)
+    private Dictionary<string, List<string>> _questPrerequisites = new();
+    
     public Task OnLoad()
     {
         // Wire up the router
@@ -142,6 +157,9 @@ public class SharedQuestsServer(
         router.SetLogger(logger);
         
         logger.Info("[SharedQuests] Initializing...");
+        
+        // Build prerequisite cache
+        BuildPrerequisiteCache();
         
         // Test reading profiles
         var statuses = GetFreshQuestStatuses();
@@ -152,12 +170,149 @@ public class SharedQuestsServer(
     }
 
     /// <summary>
+    /// Build a cache of quest prerequisites for quick lookup
+    /// </summary>
+    private void BuildPrerequisiteCache()
+    {
+        try
+        {
+            var allQuests = questHelper.GetQuestsFromDb();
+            var questNameById = allQuests.ToDictionary(q => q.Id.ToString(), q => q.QuestName ?? q.Name ?? "Unknown");
+            
+            foreach (var quest in allQuests)
+            {
+                var prerequisites = new List<string>();
+                
+                // Check AvailableForStart conditions for Quest type
+                if (quest.Conditions?.AvailableForStart != null)
+                {
+                    foreach (var condition in quest.Conditions.AvailableForStart)
+                    {
+                        // Check if this is a Quest condition
+                        if (condition.ConditionType == "Quest" && condition.Target != null)
+                        {
+                            // Target can be a string or ListOrT<string> - extract all quest IDs
+                            var targetQuestIds = ExtractTargetStrings(condition.Target);
+                            
+                            foreach (var targetQuestId in targetQuestIds)
+                            {
+                                if (questNameById.TryGetValue(targetQuestId, out var prereqName))
+                                {
+                                    prerequisites.Add(prereqName);
+                                }
+                                else
+                                {
+                                    // Fallback - use the ID
+                                    prerequisites.Add(targetQuestId);
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if (prerequisites.Count > 0)
+                {
+                    _questPrerequisites[quest.Id] = prerequisites;
+                    logger.Debug($"[SharedQuests] Quest '{quest.QuestName}' requires: {string.Join(", ", prerequisites)}");
+                }
+            }
+            
+            logger.Info($"[SharedQuests] Built prerequisite cache for {_questPrerequisites.Count} quests");
+        }
+        catch (Exception ex)
+        {
+            logger.Error($"[SharedQuests] Error building prerequisite cache: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Extract all string values from Target which may be a string or ListOrT&lt;string&gt;
+    /// Returns a list of quest IDs
+    /// </summary>
+    private List<string> ExtractTargetStrings(object target)
+    {
+        var results = new List<string>();
+        
+        if (target == null) return results;
+        
+        // If it's already a string, return it as single item
+        if (target is string str)
+        {
+            if (!string.IsNullOrEmpty(str))
+                results.Add(str);
+            return results;
+        }
+        
+        // If it's IEnumerable<string>, get all elements
+        if (target is IEnumerable<string> enumerable)
+        {
+            results.AddRange(enumerable.Where(s => !string.IsNullOrEmpty(s)));
+            return results;
+        }
+        
+        // If it's a generic IEnumerable, try to get all elements
+        if (target is System.Collections.IEnumerable nonGenericEnumerable)
+        {
+            foreach (var item in nonGenericEnumerable)
+            {
+                if (item is string s && !string.IsNullOrEmpty(s))
+                {
+                    results.Add(s);
+                }
+            }
+            if (results.Count > 0) return results;
+        }
+        
+        // Check all properties to find the actual value (handles wrapper types like ListOrT<string>)
+        foreach (var prop in target.GetType().GetProperties())
+        {
+            try
+            {
+                var value = prop.GetValue(target);
+                if (value is string valStr && !string.IsNullOrEmpty(valStr))
+                {
+                    results.Add(valStr);
+                }
+                else if (value is IEnumerable<string> valEnum)
+                {
+                    results.AddRange(valEnum.Where(s => !string.IsNullOrEmpty(s)));
+                }
+            }
+            catch { }
+        }
+        
+        return results;
+    }
+
+    /// <summary>
+    /// Get the locked reason for a quest (prerequisite quest names)
+    /// </summary>
+    private string? GetLockedReason(string questId, ProfileData profile)
+    {
+        // Only provide locked reason if quest is actually locked
+        var status = GetQuestStatusFromProfile(profile, questId);
+        if (status != QuestStatusEnum.Locked)
+        {
+            return null;
+        }
+        
+        // Check if we have prerequisite info for this quest
+        if (!_questPrerequisites.TryGetValue(questId, out var prerequisites) || prerequisites.Count == 0)
+        {
+            return null;
+        }
+        
+        // Join all prerequisites with commas
+        return string.Join(", ", prerequisites);
+    }
+
+    /// <summary>
     /// Read quest statuses directly from profile JSON files on disk
     /// This ensures we always get the latest saved data, not cached data
     /// </summary>
-    public Dictionary<string, Dictionary<string, int>> GetFreshQuestStatuses()
+    public Dictionary<string, Dictionary<string, QuestStatusInfo>> GetFreshQuestStatuses()
     {
-        var result = new Dictionary<string, Dictionary<string, int>>();
+        var result = new Dictionary<string, Dictionary<string, QuestStatusInfo>>();
         
         try
         {
@@ -189,18 +344,24 @@ public class SharedQuestsServer(
                         continue;
                     }
                     
-                    var questStatuses = new Dictionary<string, int>();
+                    var questStatuses = new Dictionary<string, QuestStatusInfo>();
                     
                     foreach (var quest in allQuests)
                     {
                         var status = GetQuestStatusFromProfile(profileData, quest.Id);
-                        questStatuses[quest.Id] = (int)status;
+                        var lockedReason = GetLockedReason(quest.Id, profileData);
+                        
+                        questStatuses[quest.Id] = new QuestStatusInfo
+                        {
+                            Status = (int)status,
+                            LockedReason = lockedReason
+                        };
                     }
                     
                     result[nickname] = questStatuses;
                     
                     // Log a few sample statuses for debugging
-                    var samples = questStatuses.Take(3).Select(kv => $"{kv.Key.Substring(0, 8)}...={(QuestStatusEnum)kv.Value}");
+                    var samples = questStatuses.Take(3).Select(kv => $"{kv.Key.Substring(0, 8)}...={(QuestStatusEnum)kv.Value.Status}");
                     logger.Debug($"[SharedQuests] Loaded {questStatuses.Count} quest statuses for {nickname} (samples: {string.Join(", ", samples)})");
                 }
                 catch (Exception ex)
