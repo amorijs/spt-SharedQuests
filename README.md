@@ -19,6 +19,10 @@ Quest descriptions show status for all profiles:
 
 <img width="2450" height="627" alt="image" src="https://github.com/user-attachments/assets/c4ccb3a8-86a4-43ef-bc2f-a22126e91bed" />
 
+Config menu:
+
+<img width="612" height="190" alt="image" src="https://github.com/user-attachments/assets/b20753ad-3f7b-4564-8575-cf34d62602a6" />
+
 
 ## Installation
 
