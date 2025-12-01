@@ -46,10 +46,28 @@ namespace SharedQuests
             LogSource = Logger;
             LogSource.LogInfo("SharedQuests client loading...");
 
+            // Initialize settings
+            Settings.Init(Config);
+
             var harmony = new Harmony("com.sharedquests.client");
             harmony.PatchAll();
 
             LogSource.LogInfo("SharedQuests client loaded!");
+        }
+
+        private void Start()
+        {
+            // Fetch profiles after a short delay to ensure server connection is ready
+            StartCoroutine(InitialFetch());
+        }
+
+        private IEnumerator InitialFetch()
+        {
+            // Wait a bit for the game to fully initialize
+            yield return new WaitForSeconds(2f);
+            
+            LogSource.LogInfo("SharedQuests: Performing initial profile fetch...");
+            FetchQuestStatuses(force: true);
         }
 
         /// <summary>
@@ -76,6 +94,10 @@ namespace SharedQuests
                         QuestStatuses = data;
                         LastFetch = DateTime.UtcNow;
                         LogSource.LogInfo($"SharedQuests: Fetched statuses for {QuestStatuses.Count} profiles");
+                        
+                        // Update settings with profile list for F12 menu
+                        Settings.UpdateProfileList(QuestStatuses.Keys);
+                        
                         return true; // Fresh data
                     }
                 }
@@ -149,6 +171,12 @@ namespace SharedQuests
         /// </summary>
         public static string BuildStatusTextRich(string questId)
         {
+            // Check if mod is enabled
+            if (!Settings.Enabled.Value)
+            {
+                return "";
+            }
+            
             if (QuestStatuses.Count == 0 || string.IsNullOrEmpty(questId))
             {
                 return $"<color=#9A8866>{STATUS_MARKER_START}</color>\n<color=#888888>Loading...</color>\n<color=#9A8866>{STATUS_MARKER_END}</color>";
@@ -157,9 +185,17 @@ namespace SharedQuests
             var lines = new List<string>();
             lines.Add($"<color=#9A8866>{STATUS_MARKER_START}</color>");
 
+            int visibleCount = 0;
             foreach (var kvp in QuestStatuses)
             {
                 var profileName = kvp.Key;
+                
+                // Skip profiles that are not visible (excluded in settings)
+                if (!Settings.IsProfileVisible(profileName))
+                {
+                    continue;
+                }
+                
                 var quests = kvp.Value;
                 int status = 0;
                 if (quests.TryGetValue(questId, out var s))
@@ -170,6 +206,13 @@ namespace SharedQuests
                 var statusName = GetStatusName(status);
                 var statusColor = GetStatusColor(status);
                 lines.Add($"<color=#CCCCCC>{profileName}:</color> <color={statusColor}>{statusName}</color>");
+                visibleCount++;
+            }
+
+            // If no profiles are visible, show a message
+            if (visibleCount == 0)
+            {
+                lines.Add("<color=#888888>No profiles selected</color>");
             }
 
             lines.Add($"<color=#9A8866>{STATUS_MARKER_END}</color>");
@@ -200,6 +243,12 @@ namespace SharedQuests
             
             // Build fresh status text
             var statusText = BuildStatusTextRich(questId);
+            
+            // If status text is empty (mod disabled), just return clean text
+            if (string.IsNullOrEmpty(statusText))
+            {
+                return cleanText;
+            }
             
             // Prepend status text
             return statusText + "\n\n" + cleanText;
