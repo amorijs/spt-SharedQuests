@@ -17,15 +17,8 @@ When viewing any quest description in the Character → Tasks menu, you'll see a
 
 Quest descriptions show status for all profiles:
 
-```
---- Shared Quest Status ---
-Marklar: Started
-JohnGoob: Completed
-clinicallylazy: Available
---------------------------
+<img width="2450" height="627" alt="image" src="https://github.com/user-attachments/assets/c4ccb3a8-86a4-43ef-bc2f-a22126e91bed" />
 
-[Original quest description...]
-```
 
 ## Installation
 
