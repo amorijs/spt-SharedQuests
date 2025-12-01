@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+    <PropertyGroup>
+        <TargetFramework>net9.0-windows</TargetFramework>
+        <RootNamespace>SharedQuests</RootNamespace>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <OutputType>Library</OutputType>
+        <Version>1.0.0</Version>
+        <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+        <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+        <PlatformTarget>x64</PlatformTarget>
+        <!-- Clean output -->
+        <DebugType>none</DebugType>
+        <DebugSymbols>false</DebugSymbols>
+        <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+        <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    </PropertyGroup>
+
+    <PropertyGroup>
+        <OutputPath>..\dist\SPT\user\mods\SharedQuestsBackend\</OutputPath>
+    </PropertyGroup>
+
+    <!-- Update this to your SPT installation path -->
+    <PropertyGroup>
+        <SPTPath>C:\SPT</SPTPath>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="SPTarkov.Common" Version="4.0.5" PrivateAssets="all" />
+        <PackageReference Include="SPTarkov.DI" Version="4.0.5" PrivateAssets="all" />
+        <PackageReference Include="SPTarkov.Server.Core" Version="4.0.5" PrivateAssets="all" />
+    </ItemGroup>
+
+    <!-- Optional: Copy to SPT for testing -->
+    <Target Name="CopyToSPT" AfterTargets="Build" Condition="Exists('$(SPTPath)')">
+        <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(SPTPath)\SPT\user\mods\SharedQuestsBackend" />
+    </Target>
+</Project>
+
