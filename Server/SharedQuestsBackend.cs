@@ -285,24 +285,13 @@ public class SharedQuestsServer(
     }
 
     /// <summary>
-    /// Get the locked reason for a quest (prerequisite quest names)
+    /// Locked reason (prerequisite quest names) — only when the quest is Locked (0).
     /// </summary>
-    private string? GetLockedReason(string questId, ProfileData profile)
+    private string? GetLockedReason(string questId, int statusCode)
     {
-        // Only provide locked reason if quest is actually locked
-        var status = GetQuestStatusFromProfile(profile, questId);
-        if (status != QuestStatusEnum.Locked)
-        {
-            return null;
-        }
-        
-        // Check if we have prerequisite info for this quest
+        if (statusCode != (int)QuestStatusEnum.Locked) return null;
         if (!_questPrerequisites.TryGetValue(questId, out var prerequisites) || prerequisites.Count == 0)
-        {
             return null;
-        }
-        
-        // Join all prerequisites with commas
         return string.Join(", ", prerequisites);
     }
 
@@ -332,34 +321,41 @@ public class SharedQuestsServer(
             {
                 try
                 {
-                    var profileData = ReadProfileFromDisk(profilePath);
-                    if (profileData == null) continue;
-                    
-                    var nickname = profileData.Nickname;
-                    if (string.IsNullOrEmpty(nickname)) continue;
-                    
+                    string json;
+                    try { json = File.ReadAllText(profilePath); }
+                    catch (Exception ex)
+                    {
+                        logger.Warning($"[SharedQuests] Error reading profile {profilePath}: {ex.Message}");
+                        continue;
+                    }
+
+                    var parsed = ProfileParser.Parse(json);
+                    if (parsed == null) continue;
+
+                    var nickname = parsed.Nickname;
+
                     // Skip headless profiles
                     if (nickname.StartsWith("headless_", StringComparison.OrdinalIgnoreCase))
                     {
                         continue;
                     }
-                    
+
                     var questStatuses = new Dictionary<string, QuestStatusInfo>();
-                    
+
                     foreach (var quest in allQuests)
                     {
-                        var status = GetQuestStatusFromProfile(profileData, quest.Id);
-                        var lockedReason = GetLockedReason(quest.Id, profileData);
-                        
+                        int statusCode = parsed.QuestStatusByQid.TryGetValue(quest.Id, out var s) ? s : 0;
+                        var lockedReason = GetLockedReason(quest.Id, statusCode);
+
                         questStatuses[quest.Id] = new QuestStatusInfo
                         {
-                            Status = (int)status,
+                            Status = statusCode,
                             LockedReason = lockedReason
                         };
                     }
-                    
+
                     result[nickname] = questStatuses;
-                    
+
                     // Log a few sample statuses for debugging
                     var samples = questStatuses.Take(3).Select(kv => $"{kv.Key.Substring(0, 8)}...={(QuestStatusEnum)kv.Value.Status}");
                     logger.Debug($"[SharedQuests] Loaded {questStatuses.Count} quest statuses for {nickname} (samples: {string.Join(", ", samples)})");
@@ -376,88 +372,6 @@ public class SharedQuestsServer(
         }
         
         return result;
-    }
-
-    /// <summary>
-    /// Simple profile data structure for reading from disk
-    /// </summary>
-    private class ProfileData
-    {
-        public string? Nickname { get; set; }
-        public List<QuestData>? Quests { get; set; }
-    }
-    
-    private class QuestData
-    {
-        public string? Qid { get; set; }
-        public int Status { get; set; }
-    }
-
-    /// <summary>
-    /// Read and parse a profile JSON file from disk
-    /// </summary>
-    private ProfileData? ReadProfileFromDisk(string path)
-    {
-        try
-        {
-            var json = File.ReadAllText(path);
-            
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            
-            // Navigate to characters.pmc.Info.Nickname
-            if (!root.TryGetProperty("characters", out var characters)) return null;
-            if (!characters.TryGetProperty("pmc", out var pmc)) return null;
-            if (!pmc.TryGetProperty("Info", out var info)) return null;
-            if (!info.TryGetProperty("Nickname", out var nicknameElement)) return null;
-            
-            var nickname = nicknameElement.GetString();
-            if (string.IsNullOrEmpty(nickname)) return null;
-            
-            // Get quests array from characters.pmc.Quests
-            var quests = new List<QuestData>();
-            if (pmc.TryGetProperty("Quests", out var questsElement) && questsElement.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var questElement in questsElement.EnumerateArray())
-                {
-                    if (questElement.TryGetProperty("qid", out var qidElement) &&
-                        questElement.TryGetProperty("status", out var statusElement))
-                    {
-                        quests.Add(new QuestData
-                        {
-                            Qid = qidElement.GetString(),
-                            Status = statusElement.ValueKind == JsonValueKind.Number 
-                                ? statusElement.GetInt32() 
-                                : (int)Enum.Parse<QuestStatusEnum>(statusElement.GetString() ?? "Locked")
-                        });
-                    }
-                }
-            }
-            
-            return new ProfileData
-            {
-                Nickname = nickname,
-                Quests = quests
-            };
-        }
-        catch (Exception ex)
-        {
-            logger.Debug($"[SharedQuests] Failed to parse profile {path}: {ex.Message}");
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Get quest status from parsed profile data
-    /// </summary>
-    private QuestStatusEnum GetQuestStatusFromProfile(ProfileData profile, string questId)
-    {
-        if (profile.Quests == null) return QuestStatusEnum.Locked;
-        
-        var quest = profile.Quests.FirstOrDefault(q => q.Qid == questId);
-        if (quest == null) return QuestStatusEnum.Locked;
-        
-        return (QuestStatusEnum)quest.Status;
     }
 
     /// <summary>
