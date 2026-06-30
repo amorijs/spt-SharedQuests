@@ -25,7 +25,7 @@ namespace SharedQuests
         public string LockedReason { get; set; }
     }
 
-    [BepInPlugin("com.sharedquests.client", "SharedQuests", "1.0.0")]
+    [BepInPlugin("com.sharedquests.client", "SharedQuests", "2.0.0")]
     public class Plugin : BaseUnityPlugin
     {
         public static ManualLogSource LogSource;
