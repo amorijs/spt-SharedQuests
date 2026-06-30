@@ -74,10 +74,6 @@ public class SharedQuestsRouter : StaticRouter
             new RouteAction(
                 "/sharedquests/statuses",
                 static async (url, info, sessionId, output) => await HandleGetStatuses(sessionId)
-            ),
-            new RouteAction(
-                "/sharedquests/refresh",
-                static async (url, info, sessionId, output) => await HandleRefresh(sessionId)
             )
         ];
     }
@@ -116,23 +112,6 @@ public class SharedQuestsRouter : StaticRouter
         }
     }
 
-    /// <summary>
-    /// Force refresh endpoint (same as regular get now)
-    /// </summary>
-    private static ValueTask<string> HandleRefresh(MongoId sessionId)
-    {
-        try
-        {
-            _logger?.Info("[SharedQuests] Refresh requested");
-            var freshData = _server?.GetFreshQuestStatuses();
-            return new ValueTask<string>(_jsonUtil!.Serialize(new { success = true, profiles = freshData?.Count ?? 0 })!);
-        }
-        catch (Exception ex)
-        {
-            _logger?.Error($"[SharedQuests] Error refreshing: {ex.Message}");
-            return new ValueTask<string>(_httpResponseUtil!.NullResponse());
-        }
-    }
 }
 
 /// <summary>
@@ -372,26 +351,5 @@ public class SharedQuestsServer(
         }
         
         return result;
-    }
-
-    /// <summary>
-    /// Get display name and color for quest status
-    /// </summary>
-    public static (string Name, string Color) GetStatusInfo(QuestStatusEnum status)
-    {
-        return status switch
-        {
-            QuestStatusEnum.Locked => ("Locked", "#808080"),
-            QuestStatusEnum.AvailableForStart => ("Available", "#FFD700"),
-            QuestStatusEnum.Started => ("Started", "#FFA500"),
-            QuestStatusEnum.AvailableForFinish => ("Ready!", "#00FF00"),
-            QuestStatusEnum.Success => ("Completed", "#32CD32"),
-            QuestStatusEnum.Fail => ("Failed", "#FF4444"),
-            QuestStatusEnum.FailRestartable => ("Failed (Retry)", "#FF6600"),
-            QuestStatusEnum.MarkedAsFailed => ("Failed", "#FF4444"),
-            QuestStatusEnum.Expired => ("Expired", "#666666"),
-            QuestStatusEnum.AvailableAfter => ("Timed", "#87CEEB"),
-            _ => ($"Unknown", "#FFFFFF")
-        };
     }
 }
