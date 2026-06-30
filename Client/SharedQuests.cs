@@ -161,21 +161,6 @@ namespace SharedQuests
         }
 
         /// <summary>
-        /// Build status text (generic, since we don't know quest ID when monitoring)
-        /// </summary>
-        public static string BuildStatusTextGeneric()
-        {
-            if (QuestStatuses.Count == 0)
-            {
-                return $"<color=#9A8866>{STATUS_MARKER_START}</color>\n<color=#888888>Loading...</color>\n<color=#9A8866>{STATUS_MARKER_END}</color>";
-            }
-
-            // When we don't have quest ID, show placeholder
-            // The status will be for whatever quest is currently displayed
-            return null;
-        }
-
-        /// <summary>
         /// Build status text for a quest (rich text version)
         /// </summary>
         public static string BuildStatusTextRich(string questId)
