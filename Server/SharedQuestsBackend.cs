@@ -5,6 +5,7 @@ using SPTarkov.Server.Core.DI;
 using SPTarkov.Server.Core.Extensions;
 using SPTarkov.Server.Core.Helpers;
 using SPTarkov.Server.Core.Models.Common;
+using SPTarkov.Server.Core.Models.Eft.Common.Tables;
 using SPTarkov.Server.Core.Models.Enums;
 using SPTarkov.Server.Core.Models.Spt.Mod;
 using SPTarkov.Server.Core.Models.Utils;
@@ -137,6 +138,61 @@ public class SharedQuestsRouter : StaticRouter
 
 }
 
+/// <summary>Dynamic (prefix-match) router for per-quest detail: /sharedquests/quest/&lt;id&gt;.</summary>
+[Injectable]
+public class SharedQuestsDynamicRouter : DynamicRouter
+{
+    private static JsonUtil? _jsonUtil;
+    private static HttpResponseUtil? _httpResponseUtil;
+    private static SharedQuestsServer? _server;
+
+    public SharedQuestsDynamicRouter(JsonUtil jsonUtil, HttpResponseUtil httpResponseUtil)
+        : base(jsonUtil, GetCustomRoutes())
+    {
+        _jsonUtil = jsonUtil;
+        _httpResponseUtil = httpResponseUtil;
+    }
+
+    public void SetServer(SharedQuestsServer server) => _server = server;
+
+    private static List<RouteAction> GetCustomRoutes()
+    {
+        return
+        [
+            new RouteAction(
+                "/sharedquests/quest/",
+                static async (url, info, sessionId, output) => await HandleQuestDetail(url)
+            )
+        ];
+    }
+
+    /// <summary>
+    /// Returns the detail payload for one quest. The matched url is the full request
+    /// path (the "/sharedquests/quest/" prefix registered above plus the quest id),
+    /// so the quest id is everything after the last '/'.
+    /// </summary>
+    private static ValueTask<string> HandleQuestDetail(string url)
+    {
+        try
+        {
+            var questId = url;
+            var slash = questId.LastIndexOf('/');
+            if (slash >= 0) questId = questId.Substring(slash + 1);
+            var query = questId.IndexOf('?');
+            if (query >= 0) questId = questId.Substring(0, query);
+
+            var detail = _server?.GetQuestDetail(questId);
+            return detail == null
+                ? new ValueTask<string>(_httpResponseUtil!.NullResponse())
+                : new ValueTask<string>(_jsonUtil!.Serialize(detail)!);
+        }
+        catch (Exception)
+        {
+            return new ValueTask<string>(_httpResponseUtil!.NullResponse());
+        }
+    }
+}
+
 /// <summary>
 /// Main server class that provides quest status data
 /// </summary>
@@ -144,9 +200,17 @@ public class SharedQuestsRouter : StaticRouter
 public class SharedQuestsServer(
     ISptLogger<SharedQuestsServer> logger,
     SharedQuestsRouter router,
+    SharedQuestsDynamicRouter dynamicRouter,
     QuestHelper questHelper,
-    DatabaseService databaseService) : IOnLoad
+    DatabaseService databaseService,
+    LocaleService localeService) : IOnLoad
 {
+    // Money item tpls: roubles, dollars, euros
+    private static readonly HashSet<string> MoneyTpls =
+    [
+        "5449016a4bdc2d6f028b456f", "5696686a4bdc2da3298b456a", "569668774bdc2da2298b4568",
+    ];
+
     // Path to profiles directory (relative to SPT root)
     private const string ProfilesPath = "user/profiles";
 
@@ -164,6 +228,7 @@ public class SharedQuestsServer(
         // Wire up the router
         router.SetServer(this);
         router.SetLogger(logger);
+        dynamicRouter.SetServer(this);
 
         logger.Info("[SharedQuests] Initializing...");
 
@@ -174,7 +239,7 @@ public class SharedQuestsServer(
         // Test reading profiles
         var statuses = GetFreshQuestStatuses();
         logger.Success($"[SharedQuests] Found {statuses.Count} profiles with quest data");
-        logger.Info("[SharedQuests] Endpoints available: /sharedquests/statuses, /sharedquests/overview");
+        logger.Info("[SharedQuests] Endpoints available: /sharedquests/statuses, /sharedquests/overview, /sharedquests/quest/<id>");
 
         return Task.CompletedTask;
     }
@@ -426,6 +491,12 @@ public class SharedQuestsServer(
     /// </summary>
     public OverviewResponse GetOverview()
     {
+        return OverviewBuilder.Build(_questMetas, ReadProfilesFresh(), _locationIdToMapId);
+    }
+
+    /// <summary>Fresh-from-disk parsed profiles, headless excluded. Never throws.</summary>
+    private List<ParsedProfile> ReadProfilesFresh()
+    {
         var profiles = new List<ParsedProfile>();
         try
         {
@@ -449,9 +520,93 @@ public class SharedQuestsServer(
         }
         catch (Exception ex)
         {
-            logger.Error($"[SharedQuests] Error reading profiles for overview: {ex.Message}");
+            logger.Error($"[SharedQuests] Error reading profiles: {ex.Message}");
+        }
+        return profiles;
+    }
+
+    /// <summary>Detail payload for one quest, or null when the id is unknown.</summary>
+    public QuestDetailResponse? GetQuestDetail(string questId)
+    {
+        var meta = _questMetas.FirstOrDefault(m => m.Id == questId);
+        var quest = questHelper.GetQuestsFromDb().FirstOrDefault(q => q.Id.ToString() == questId);
+        if (meta == null || quest == null) return null;
+
+        var locales = localeService.GetLocaleDb();
+        string L(string key, string fallback) =>
+            locales.TryGetValue(key, out var v) && !string.IsNullOrEmpty(v) ? v : fallback;
+
+        var objectives = new List<ObjectiveMeta>();
+        foreach (var condition in quest.Conditions?.AvailableForFinish ?? [])
+        {
+            var conditionId = condition.Id.ToString();
+            if (string.IsNullOrEmpty(conditionId)) continue;
+            double? target = condition.Value is > 0 ? condition.Value : null;
+            objectives.Add(new ObjectiveMeta { ConditionId = conditionId, Text = L(conditionId, conditionId), Target = target });
         }
 
-        return OverviewBuilder.Build(_questMetas, profiles, _locationIdToMapId);
+        var rewards = new List<RewardMeta>();
+        try
+        {
+            List<Reward> successRewards = quest.Rewards != null && quest.Rewards.TryGetValue("Success", out var s) ? s : [];
+            foreach (var reward in successRewards)
+            {
+                switch (reward.Type)
+                {
+                    case RewardType.Experience:
+                        if (reward.Value is double xp)
+                            rewards.Add(new RewardMeta { Kind = "Experience", Value = xp });
+                        break;
+
+                    case RewardType.TraderStanding:
+                        if (reward.Value is double rep)
+                            rewards.Add(new RewardMeta
+                            {
+                                Kind = "TraderStanding",
+                                Name = OverviewBuilder.TraderName(reward.Target),
+                                Value = rep,
+                            });
+                        break;
+
+                    case RewardType.Item:
+                        var firstItem = reward.Items?.FirstOrDefault();
+                        if (firstItem == null) continue;
+                        var tpl = firstItem.Template.ToString();
+                        var count = 1;
+                        if (reward.Value is double c && c >= 1) count = (int)c;
+                        else if (firstItem.Upd?.StackObjectsCount is double stack && stack >= 1) count = (int)stack;
+                        var isMoney = MoneyTpls.Contains(tpl);
+                        rewards.Add(new RewardMeta
+                        {
+                            Kind = isMoney ? "Money" : "Item",
+                            Name = L($"{tpl} Name", tpl),
+                            Count = count,
+                        });
+                        break;
+
+                    // other kinds (AssortmentUnlock, Skill, ...) intentionally skipped
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"[SharedQuests] Error extracting rewards for {questId}: {ex.Message}");
+        }
+
+        var detailMeta = new QuestDetailMeta
+        {
+            Id = meta.Id,
+            Name = L($"{questId} name", meta.Name),
+            Trader = OverviewBuilder.TraderName(meta.TraderId),
+            Maps = OverviewBuilder.DeriveMaps(meta, _locationIdToMapId),
+            Description = L($"{questId} description", ""),
+            Objectives = objectives,
+            Prereqs = meta.PrereqQuestIds
+                .Select(id => new PrereqMeta { Id = id, Name = _questMetas.FirstOrDefault(m => m.Id == id)?.Name ?? id })
+                .ToList(),
+            Rewards = rewards,
+        };
+
+        return QuestDetailBuilder.Build(detailMeta, ReadProfilesFresh());
     }
 }

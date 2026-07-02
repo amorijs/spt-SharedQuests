@@ -61,6 +61,10 @@ public static class OverviewBuilder
         ["656f0f98d80a697f855d34b1"] = "BTR Driver",
     };
 
+    /// <summary>Display name for a trader mongo id; "" when unknown.</summary>
+    public static string TraderName(string? traderId) =>
+        traderId != null && TraderNames.TryGetValue(traderId, out var name) ? name : "";
+
     /// <summary>
     /// Maps a quest to canonical lowercase map ids. A resolvable template Location wins;
     /// otherwise the AvailableForFinish condition locations are used. Empty = "any map".
@@ -133,7 +137,7 @@ public static class OverviewBuilder
             {
                 Id = quest.Id,
                 Name = quest.Name,
-                Trader = quest.TraderId != null && TraderNames.TryGetValue(quest.TraderId, out var trader) ? trader : "",
+                Trader = TraderName(quest.TraderId),
                 Maps = DeriveMaps(quest, locationIdToMapId),
                 Statuses = perProfile,
             });
