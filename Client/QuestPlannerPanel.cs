@@ -160,7 +160,7 @@ namespace SharedQuests
             // Re-apply relevance for visible profiles only: a quest active solely
             // for excluded profiles is hidden entirely.
             bool IsActive(OverviewQuest q, string profile) =>
-                q.Statuses.TryGetValue(profile, out var s) && (s.Status == 1 || s.Status == 2 || s.Status == 3);
+                q.Statuses != null && q.Statuses.TryGetValue(profile, out var s) && (s.Status == 1 || s.Status == 2 || s.Status == 3);
             var relevant = data.Quests
                 .Where(q => visibleProfiles.Any(p => IsActive(q, p)))
                 .ToList();
