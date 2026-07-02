@@ -7,6 +7,7 @@ When viewing any quest description in the Character → Tasks menu, you'll see a
 ## Features
 
 - **Real-time Quest Status** - See all profiles' quest status directly in quest descriptions
+- **Quest Planner** - "QUESTS" button in the main menu opens an overlay showing everyone's quests grouped by map, sorted by overlap, with blocked players and their missing prerequisites - pick the best map for the group at a glance
 - **Live Updates** - Status updates without server restart (reads from disk on each request)
 - **Color-coded Statuses** - Easy visual identification with rich text colors
 - **F12 Configuration Menu** - Enable/disable profiles from showing in the status display
