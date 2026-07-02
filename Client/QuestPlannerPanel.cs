@@ -63,6 +63,7 @@ namespace SharedQuests
         private TextMeshProUGUI _messageLabel;
         private GameObject _retryButton;
         private bool _visible;
+        private QuestDetailPanel _detail;
 
         // canonical map id (from server) -> display name
         internal static readonly Dictionary<string, string> MapNames = new Dictionary<string, string>
@@ -100,7 +101,9 @@ namespace SharedQuests
 
         private void Update()
         {
-            if (_visible && Input.GetKeyDown(KeyCode.Escape)) Hide();
+            if (!_visible || !Input.GetKeyDown(KeyCode.Escape)) return;
+            if (_detail != null && _detail.IsOpen) _detail.Hide();
+            else Hide();
         }
 
         public void Toggle()
@@ -121,6 +124,7 @@ namespace SharedQuests
         {
             if (!_visible) return;
             _visible = false;
+            _detail?.Hide();
             _root.SetActive(false);
         }
 
@@ -369,6 +373,8 @@ namespace SharedQuests
             _retryButton.SetActive(false);
 
             _root.SetActive(false);
+
+            _detail = new QuestDetailPanel(transform);
         }
 
         /// <summary>Sticky-ish first row: blank name column + one profile name per column.</summary>
@@ -453,6 +459,11 @@ namespace SharedQuests
         private void BuildQuestRow(Transform parent, OverviewQuest quest, List<string> profiles)
         {
             var row = MakeRow("Quest", RowH, parent);
+            row.AddComponent<Image>().color = Color.clear; // raycast target for the button
+            var rowBtn = row.AddComponent<Button>();
+            rowBtn.transition = Selectable.Transition.None;
+            var questId = quest.Id;
+            rowBtn.onClick.AddListener(() => _detail.ShowFor(questId, profiles));
 
             string traderSuffix = string.IsNullOrEmpty(quest.Trader) ? "" : $"  <color=#555555>{quest.Trader}</color>";
             string nameColor = IsSharedByAll(quest, profiles) ? "#FFA500" : "#CCCCCC";
