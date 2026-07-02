@@ -165,4 +165,20 @@ public class OverviewBuilderTests
 
         Assert.Equal(["Alpha", "Zebra"], resp.Quests.Select(q => q.Name).ToList());
     }
+
+    [Fact]
+    public void Build_DuplicateNicknames_LastWinsInsteadOfThrowing()
+    {
+        var quests = new List<QuestMeta> { Quest("q1") };
+        var profiles = new List<ParsedProfile>
+        {
+            Profile("Alice", ("q1", 0)),
+            Profile("Alice", ("q1", 2)),
+        };
+
+        var resp = OverviewBuilder.Build(quests, profiles, LocMap);
+
+        Assert.Equal(["Alice"], resp.Profiles);
+        Assert.Equal(2, resp.Quests.Single().Statuses["Alice"].Status);
+    }
 }

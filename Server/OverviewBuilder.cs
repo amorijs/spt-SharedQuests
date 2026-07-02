@@ -106,9 +106,9 @@ public static class OverviewBuilder
         var result = new List<OverviewQuest>();
         foreach (var quest in quests.OrderBy(q => q.Name, StringComparer.Ordinal))
         {
-            var statuses = profiles.ToDictionary(
-                p => p.Nickname,
-                p => p.QuestStatusByQid.TryGetValue(quest.Id, out var s) ? s : 0);
+            var statuses = new Dictionary<string, int>();
+            foreach (var p in profiles)
+                statuses[p.Nickname] = p.QuestStatusByQid.TryGetValue(quest.Id, out var s) ? s : 0;
 
             if (!statuses.Values.Any(s => s is 1 or 2 or 3)) continue;
 
@@ -141,7 +141,7 @@ public static class OverviewBuilder
 
         return new OverviewResponse
         {
-            Profiles = profiles.Select(p => p.Nickname).ToList(),
+            Profiles = profiles.Select(p => p.Nickname).Distinct().ToList(),
             Quests = result,
         };
     }
