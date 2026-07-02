@@ -145,6 +145,7 @@ public class SharedQuestsDynamicRouter : DynamicRouter
     private static JsonUtil? _jsonUtil;
     private static HttpResponseUtil? _httpResponseUtil;
     private static SharedQuestsServer? _server;
+    private static ISptLogger<SharedQuestsServer>? _logger;
 
     public SharedQuestsDynamicRouter(JsonUtil jsonUtil, HttpResponseUtil httpResponseUtil)
         : base(jsonUtil, GetCustomRoutes())
@@ -154,6 +155,8 @@ public class SharedQuestsDynamicRouter : DynamicRouter
     }
 
     public void SetServer(SharedQuestsServer server) => _server = server;
+
+    public void SetLogger(ISptLogger<SharedQuestsServer> logger) => _logger = logger;
 
     private static List<RouteAction> GetCustomRoutes()
     {
@@ -186,8 +189,9 @@ public class SharedQuestsDynamicRouter : DynamicRouter
                 ? new ValueTask<string>(_httpResponseUtil!.NullResponse())
                 : new ValueTask<string>(_jsonUtil!.Serialize(detail)!);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger?.Error($"[SharedQuests] Error handling quest detail: {ex.Message}");
             return new ValueTask<string>(_httpResponseUtil!.NullResponse());
         }
     }
@@ -229,6 +233,7 @@ public class SharedQuestsServer(
         router.SetServer(this);
         router.SetLogger(logger);
         dynamicRouter.SetServer(this);
+        dynamicRouter.SetLogger(logger);
 
         logger.Info("[SharedQuests] Initializing...");
 
