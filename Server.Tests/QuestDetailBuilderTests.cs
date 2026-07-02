@@ -77,6 +77,7 @@ public class QuestDetailBuilderTests
         var alice = Profile("Alice", statuses: new() { ["q0"] = 4 });
         var bob = Profile("Bob");
         var detail = QuestDetailBuilder.Build(meta, new[] { alice, bob });
+        Assert.Equal("q0", detail.Prereqs[0].Id);
         Assert.Equal(4, detail.Prereqs[0].Statuses["Alice"]);
         Assert.Equal(0, detail.Prereqs[0].Statuses["Bob"]);
     }

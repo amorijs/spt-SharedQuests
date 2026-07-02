@@ -54,6 +54,7 @@ public sealed class QuestDetailObjective
 
 public sealed class QuestDetailPrereq
 {
+    public required string Id { get; init; }
     public required string Name { get; init; }
     public required Dictionary<string, int> Statuses { get; init; }
 }
@@ -97,7 +98,7 @@ public static class QuestDetailBuilder
             var statuses = new Dictionary<string, int>();
             foreach (var profile in profiles)
                 statuses[profile.Nickname] = profile.QuestStatusByQid.TryGetValue(prereq.Id, out var s) ? s : 0;
-            prereqs.Add(new QuestDetailPrereq { Name = prereq.Name, Statuses = statuses });
+            prereqs.Add(new QuestDetailPrereq { Id = prereq.Id, Name = prereq.Name, Statuses = statuses });
         }
 
         return new QuestDetailResponse

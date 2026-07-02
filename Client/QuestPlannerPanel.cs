@@ -119,7 +119,7 @@ namespace SharedQuests
         {
             if (!_visible || !Input.GetKeyDown(KeyCode.Escape)) return;
             if (_searchInput != null && _searchInput.isFocused) return; // Esc just unfocuses the search box
-            if (_detail != null && _detail.IsOpen) _detail.Hide();
+            if (_detail != null && _detail.IsOpen) _detail.Back(); // pops one quest level, closes at the root
             else Hide();
         }
 

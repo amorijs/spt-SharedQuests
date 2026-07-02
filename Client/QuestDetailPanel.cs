@@ -25,6 +25,7 @@ namespace SharedQuests
 
     public class QuestDetailPrereq
     {
+        public string Id { get; set; }
         public string Name { get; set; }
         public Dictionary<string, int> Statuses { get; set; }
     }
@@ -59,6 +60,8 @@ namespace SharedQuests
 
         private string _questId;
         private List<string> _profiles = new List<string>();
+        private readonly List<string> _history = new List<string>(); // quest ids beneath the current one
+        private readonly GameObject _back;
 
         public bool IsOpen => _root.activeSelf;
 
@@ -124,6 +127,25 @@ namespace SharedQuests
             var closeBtn = closeGo.AddComponent<Button>();
             closeBtn.transition = Selectable.Transition.None;
             closeBtn.onClick.AddListener(Hide);
+
+            // Back chevron (top-left, mirrors the close button); only shown when there's history
+            var backGo = QuestPlannerPanel.MakeRect("Back", panelGo.transform);
+            var backRt = backGo.GetComponent<RectTransform>();
+            backRt.anchorMin = new Vector2(0f, 1f);
+            backRt.anchorMax = new Vector2(0f, 1f);
+            backRt.pivot = new Vector2(0f, 1f);
+            backRt.anchoredPosition = new Vector2(12f, -12f);
+            backRt.sizeDelta = new Vector2(32f, 32f);
+            backGo.AddComponent<Image>().color = Color.clear;
+            var backLabel = QuestPlannerPanel.MakeTMP("Chevron", backGo.transform, 24f, FontStyles.Bold, TextAlignmentOptions.Center);
+            QuestPlannerPanel.Stretch(backLabel.rectTransform);
+            backLabel.text = "‹";
+            backLabel.color = QuestPlannerPanel.Accent;
+            var backBtn = backGo.AddComponent<Button>();
+            backBtn.transition = Selectable.Transition.None;
+            backBtn.onClick.AddListener(Back);
+            _back = backGo;
+            _back.SetActive(false);
 
             var divider = QuestPlannerPanel.MakeRect("Divider", panelGo.transform);
             var dividerRt = divider.GetComponent<RectTransform>();
@@ -201,9 +223,30 @@ namespace SharedQuests
 
         public void ShowFor(string questId, List<string> visibleProfiles)
         {
+            _history.Clear();
             _questId = questId;
             _profiles = visibleProfiles ?? new List<string>();
             _root.SetActive(true);
+            Refresh();
+        }
+
+        private void NavigateTo(string questId)
+        {
+            _history.Add(_questId);
+            _questId = questId;
+            Refresh();
+        }
+
+        /// <summary>Pops one level of quest history; closes the panel from the first level.</summary>
+        public void Back()
+        {
+            if (_history.Count == 0)
+            {
+                Hide();
+                return;
+            }
+            _questId = _history[_history.Count - 1];
+            _history.RemoveAt(_history.Count - 1);
             Refresh();
         }
 
@@ -215,6 +258,10 @@ namespace SharedQuests
             ShowMessage("Loading...", showRetry: false);
             _title.text = "QUEST DETAILS";
             _sub.text = "";
+
+            bool hasHistory = _history.Count > 0;
+            _back.SetActive(hasHistory);
+            _title.rectTransform.offsetMin = new Vector2(hasHistory ? 52f : 24f, -HeaderH + 14f);
 
             QuestDetailResponse data;
             try
@@ -249,7 +296,7 @@ namespace SharedQuests
             var subParts = new List<string>();
             if (!string.IsNullOrEmpty(data.Trader)) subParts.Add(data.Trader.ToUpperInvariant());
             if (maps.Count > 0) subParts.Add(string.Join(", ", maps));
-            subParts.Add("ESC TO GO BACK");
+            subParts.Add(_history.Count > 0 ? "ESC TO GO BACK" : "ESC TO CLOSE");
             _sub.text = string.Join("  ·  ", subParts);
 
             if (!string.IsNullOrEmpty(data.Description))
@@ -283,8 +330,17 @@ namespace SharedQuests
                         if (prereq.Statuses != null) prereq.Statuses.TryGetValue(p, out status);
                         return $"<color={Plugin.GetStatusColor(status)}>{p} {Plugin.GetStatusName(status)}</color>";
                     });
-                    AddParagraph($"<color=#CCCCCC>•  {prereq.Name}</color>   {string.Join("   ", fragments)}",
+                    bool clickable = !string.IsNullOrEmpty(prereq.Id);
+                    var name = clickable ? $"<u>{prereq.Name}</u> ›" : prereq.Name;
+                    var label = AddParagraph($"<color=#CCCCCC>•  {name}</color>   {string.Join("   ", fragments)}",
                         14f, Color.white);
+                    if (clickable)
+                    {
+                        var id = prereq.Id;
+                        var btn = label.gameObject.AddComponent<Button>();
+                        btn.transition = Selectable.Transition.None;
+                        btn.onClick.AddListener(() => NavigateTo(id));
+                    }
                 }
             }
 
@@ -325,12 +381,13 @@ namespace SharedQuests
             le.flexibleHeight = 0f;
         }
 
-        private void AddParagraph(string text, float fontSize, Color color)
+        private TextMeshProUGUI AddParagraph(string text, float fontSize, Color color)
         {
             var label = QuestPlannerPanel.MakeTMP("Para", _content, fontSize, FontStyles.Normal, TextAlignmentOptions.TopLeft);
             label.text = text;
             label.color = color;
             label.enableWordWrapping = true;
+            return label;
         }
 
         private void ShowMessage(string text, bool showRetry)
