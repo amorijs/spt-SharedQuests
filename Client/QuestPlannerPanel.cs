@@ -65,7 +65,7 @@ namespace SharedQuests
         private bool _visible;
 
         // canonical map id (from server) -> display name
-        private static readonly Dictionary<string, string> MapNames = new Dictionary<string, string>
+        internal static readonly Dictionary<string, string> MapNames = new Dictionary<string, string>
         {
             ["bigmap"] = "CUSTOMS",
             ["factory"] = "FACTORY",
