@@ -53,8 +53,8 @@ namespace SharedQuests
         }
 
         public static readonly Color Accent = new Color(0.604f, 0.533f, 0.400f); // #9A8866
-        private const float HeaderH = 72f;
-        private const float PanelW = 980f;
+        private const float HeaderH = 80f;
+        private const float PanelW = 1360f;
 
         private GameObject _root;
         private RectTransform _contentRt;
@@ -84,9 +84,9 @@ namespace SharedQuests
         };
 
         private const string AnyMapKey = "__any__";
-        private const float PlayerColW = 105f;
-        private const float RowH = 26f;
-        private const float SectionHeaderH = 34f;
+        private const float PlayerColW = 130f;
+        private const float RowH = 32f;
+        private const float SectionHeaderH = 42f;
 
         // map id -> expanded state, persists across refreshes while the game runs
         private readonly Dictionary<string, bool> _sectionExpanded = new Dictionary<string, bool>();
@@ -225,7 +225,10 @@ namespace SharedQuests
             var canvas = gameObject.AddComponent<Canvas>();
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
             canvas.sortingOrder = 500;
-            gameObject.AddComponent<CanvasScaler>();
+            var scaler = gameObject.AddComponent<CanvasScaler>();
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1920f, 1080f);
+            scaler.matchWidthOrHeight = 1f;
             gameObject.AddComponent<GraphicRaycaster>();
 
             _root = MakeRect("PlannerRoot", transform);
@@ -260,7 +263,7 @@ namespace SharedQuests
             topBarRt.sizeDelta = new Vector2(0f, 3f);
             topBar.AddComponent<Image>().color = Accent;
 
-            var title = MakeTMP("Title", panelGo.transform, 22f, FontStyles.Bold, TextAlignmentOptions.Left);
+            var title = MakeTMP("Title", panelGo.transform, 26f, FontStyles.Bold, TextAlignmentOptions.Left);
             title.text = "SHARED QUESTS";
             title.color = Accent;
             title.characterSpacing = 5f;
@@ -268,7 +271,7 @@ namespace SharedQuests
                 anchorMin: new Vector2(0f, 1f), anchorMax: new Vector2(1f, 1f),
                 offsetMin: new Vector2(24f, -HeaderH + 14f), offsetMax: new Vector2(-60f, -14f));
 
-            var sub = MakeTMP("Sub", panelGo.transform, 10f, FontStyles.Normal, TextAlignmentOptions.Left);
+            var sub = MakeTMP("Sub", panelGo.transform, 12f, FontStyles.Normal, TextAlignmentOptions.Left);
             sub.text = "QUEST PROGRESS BY MAP  ·  ESC OR CLICK OUTSIDE TO CLOSE";
             sub.color = new Color(0.35f, 0.35f, 0.35f);
             sub.characterSpacing = 2f;
@@ -285,7 +288,7 @@ namespace SharedQuests
             closeRt.anchoredPosition = new Vector2(-12f, -12f);
             closeRt.sizeDelta = new Vector2(32f, 32f);
             closeGo.AddComponent<Image>().color = Color.clear;
-            var closeLabel = MakeTMP("X", closeGo.transform, 18f, FontStyles.Bold, TextAlignmentOptions.Center);
+            var closeLabel = MakeTMP("X", closeGo.transform, 20f, FontStyles.Bold, TextAlignmentOptions.Center);
             Stretch(closeLabel.rectTransform);
             closeLabel.text = "✕";
             closeLabel.color = new Color(0.6f, 0.6f, 0.6f);
@@ -323,6 +326,8 @@ namespace SharedQuests
             _contentRt.anchorMin = new Vector2(0f, 1f);
             _contentRt.anchorMax = new Vector2(1f, 1f);
             _contentRt.pivot = new Vector2(0.5f, 1f);
+            _contentRt.anchoredPosition = Vector2.zero;
+            _contentRt.sizeDelta = Vector2.zero;
             var layout = contentGo.AddComponent<VerticalLayoutGroup>();
             layout.childControlWidth = true;
             layout.childControlHeight = true;
@@ -336,7 +341,7 @@ namespace SharedQuests
             _contentContainer = contentGo.transform;
 
             // Centered message + retry (for loading/error/empty states)
-            _messageLabel = MakeTMP("Message", panelGo.transform, 14f, FontStyles.Normal, TextAlignmentOptions.Center);
+            _messageLabel = MakeTMP("Message", panelGo.transform, 16f, FontStyles.Normal, TextAlignmentOptions.Center);
             _messageLabel.color = new Color(0.45f, 0.45f, 0.45f);
             SetRect(_messageLabel.rectTransform,
                 anchorMin: new Vector2(0f, 0.45f), anchorMax: new Vector2(1f, 0.6f),
@@ -350,7 +355,7 @@ namespace SharedQuests
             retryRt.pivot = new Vector2(0.5f, 0.5f);
             retryRt.sizeDelta = new Vector2(120f, 32f);
             retryGo.AddComponent<Image>().color = new Color(Accent.r, Accent.g, Accent.b, 0.2f);
-            var retryLabel = MakeTMP("Label", retryGo.transform, 12f, FontStyles.Bold, TextAlignmentOptions.Center);
+            var retryLabel = MakeTMP("Label", retryGo.transform, 14f, FontStyles.Bold, TextAlignmentOptions.Center);
             Stretch(retryLabel.rectTransform);
             retryLabel.text = "RETRY";
             retryLabel.color = Accent;
@@ -367,10 +372,10 @@ namespace SharedQuests
         private void BuildHeaderRow(List<string> profiles)
         {
             var row = MakeRow("HeaderRow", RowH + 6f);
-            AddCell(row.transform, "", flexible: true, 12f, FontStyles.Bold, Color.clear);
+            AddCell(row.transform, "", flexible: true, 15f, FontStyles.Bold, Color.clear);
             foreach (var profile in profiles)
             {
-                var cell = AddCell(row.transform, profile, flexible: false, 12f, FontStyles.Bold,
+                var cell = AddCell(row.transform, profile, flexible: false, 15f, FontStyles.Bold,
                     new Color(0.8f, 0.8f, 0.8f));
                 cell.overflowMode = TextOverflowModes.Ellipsis;
             }
@@ -391,7 +396,7 @@ namespace SharedQuests
             // Section header (click to toggle)
             var headerGo = MakeRow($"Section_{mapKey}", SectionHeaderH);
             headerGo.AddComponent<Image>().color = new Color(1f, 1f, 1f, 0.04f);
-            var headerLabel = MakeTMP("Label", headerGo.transform, 14f, FontStyles.Bold, TextAlignmentOptions.MidlineLeft);
+            var headerLabel = MakeTMP("Label", headerGo.transform, 17f, FontStyles.Bold, TextAlignmentOptions.MidlineLeft);
             Stretch(headerLabel.rectTransform);
             headerLabel.rectTransform.offsetMin = new Vector2(8f, 0f);
             string arrow = expanded ? "▼" : "▶";
@@ -419,6 +424,8 @@ namespace SharedQuests
                 _sectionExpanded[mapKey] = now;
                 rowsGo.SetActive(now);
                 headerLabel.text = headerLabel.text.Replace(now ? "▶" : "▼", now ? "▼" : "▶");
+                if (now)
+                    LayoutRebuilder.ForceRebuildLayoutImmediate((RectTransform)rowsGo.transform);
                 LayoutRebuilder.ForceRebuildLayoutImmediate(_contentRt);
             });
 
@@ -432,7 +439,7 @@ namespace SharedQuests
 
             string traderSuffix = string.IsNullOrEmpty(quest.Trader) ? "" : $"  <color=#555555>{quest.Trader}</color>";
             var nameCell = AddCell(row.transform, $"<color=#CCCCCC>{quest.Name}</color>{traderSuffix}",
-                flexible: true, 12f, FontStyles.Normal, Color.white);
+                flexible: true, 15f, FontStyles.Normal, Color.white);
             nameCell.overflowMode = TextOverflowModes.Ellipsis;
 
             foreach (var profile in profiles)
@@ -442,7 +449,7 @@ namespace SharedQuests
                 int status = info != null ? info.Status : 0;
                 // Locked with no known blocker = quest just isn't relevant to this profile yet
                 bool notRelevant = status == 0 && (info == null || string.IsNullOrEmpty(info.LockedReason));
-                var cell = AddCell(row.transform, "", flexible: false, 11f, FontStyles.Bold, Color.white);
+                var cell = AddCell(row.transform, "", flexible: false, 14f, FontStyles.Bold, Color.white);
                 cell.text = notRelevant
                     ? "<color=#555555>–</color>"
                     : $"<color={Plugin.GetStatusColor(status)}>{Plugin.GetStatusName(status)}</color>";
@@ -456,7 +463,7 @@ namespace SharedQuests
                 var subRow = MakeRow("Blocked", RowH - 6f, parent);
                 var subLabel = AddCell(subRow.transform,
                     $"<color=#666666>└ {profile} needs: {info.LockedReason}</color>",
-                    flexible: true, 10f, FontStyles.Normal, Color.white);
+                    flexible: true, 13f, FontStyles.Normal, Color.white);
                 subLabel.rectTransform.offsetMin = new Vector2(24f, 0f);
                 subLabel.overflowMode = TextOverflowModes.Ellipsis;
             }
@@ -486,7 +493,7 @@ namespace SharedQuests
             label.text = text;
             label.color = color;
             var le = label.gameObject.AddComponent<LayoutElement>();
-            if (flexible) { le.flexibleWidth = 1f; le.minWidth = 200f; }
+            if (flexible) { le.flexibleWidth = 1f; le.minWidth = 280f; }
             else { le.preferredWidth = PlayerColW; le.flexibleWidth = 0f; }
             return label;
         }
