@@ -1,11 +1,36 @@
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json;
+using SPT.Common.Http;
+using System.Linq;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
 namespace SharedQuests
 {
+    /// <summary>Overview payload from /sharedquests/overview (mirrors server DTOs).</summary>
+    public class OverviewProfileStatus
+    {
+        public int Status { get; set; }
+        public string LockedReason { get; set; }
+    }
+
+    public class OverviewQuest
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+        public string Trader { get; set; }
+        public List<string> Maps { get; set; }
+        public Dictionary<string, OverviewProfileStatus> Statuses { get; set; }
+    }
+
+    public class OverviewResponse
+    {
+        public List<string> Profiles { get; set; }
+        public List<OverviewQuest> Quests { get; set; }
+    }
+
     /// <summary>
     /// Full-screen overlay showing all profiles' quest statuses grouped by map.
     /// UI is built entirely in code (no asset bundles), LootNet-style.
@@ -38,6 +63,33 @@ namespace SharedQuests
         private TextMeshProUGUI _messageLabel;
         private GameObject _retryButton;
         private bool _visible;
+
+        // canonical map id (from server) -> display name
+        private static readonly Dictionary<string, string> MapNames = new Dictionary<string, string>
+        {
+            ["bigmap"] = "CUSTOMS",
+            ["factory"] = "FACTORY",
+            ["interchange"] = "INTERCHANGE",
+            ["laboratory"] = "THE LAB",
+            ["lighthouse"] = "LIGHTHOUSE",
+            ["rezervbase"] = "RESERVE",
+            ["sandbox"] = "GROUND ZERO",
+            ["shoreline"] = "SHORELINE",
+            ["tarkovstreets"] = "STREETS OF TARKOV",
+            ["woods"] = "WOODS",
+            ["labyrinth"] = "LABYRINTH",
+            ["suburbs"] = "SUBURBS",
+            ["terminal"] = "TERMINAL",
+            ["town"] = "TOWN",
+        };
+
+        private const string AnyMapKey = "__any__";
+        private const float PlayerColW = 105f;
+        private const float RowH = 26f;
+        private const float SectionHeaderH = 34f;
+
+        // map id -> expanded state, persists across refreshes while the game runs
+        private readonly Dictionary<string, bool> _sectionExpanded = new Dictionary<string, bool>();
 
         private void Awake()
         {
@@ -72,10 +124,79 @@ namespace SharedQuests
             _root.SetActive(false);
         }
 
-        /// <summary>Fetches overview data and rebuilds the rows. Filled in by the data task.</summary>
+        /// <summary>Fetches overview data and rebuilds the rows.</summary>
         private void RefreshContent()
         {
             ShowMessage("Loading...", showRetry: false);
+
+            OverviewResponse data;
+            try
+            {
+                var response = RequestHandler.GetJson("/sharedquests/overview");
+                data = JsonConvert.DeserializeObject<OverviewResponse>(response);
+            }
+            catch (Exception ex)
+            {
+                Plugin.LogSource.LogError($"SharedQuests: Error fetching overview: {ex.Message}");
+                data = null;
+            }
+
+            if (data == null || data.Profiles == null || data.Quests == null)
+            {
+                ShowMessage("Couldn't reach SharedQuests server", showRetry: true);
+                return;
+            }
+
+            // Keep the F12 profile checkboxes in sync
+            Settings.UpdateProfileList(data.Profiles);
+
+            var visibleProfiles = data.Profiles.Where(Settings.IsProfileVisible).ToList();
+            if (visibleProfiles.Count == 0)
+            {
+                ShowMessage("No profiles selected (check F12 menu)", showRetry: false);
+                return;
+            }
+
+            // Re-apply relevance for visible profiles only: a quest active solely
+            // for excluded profiles is hidden entirely.
+            bool IsActive(OverviewQuest q, string profile) =>
+                q.Statuses.TryGetValue(profile, out var s) && (s.Status == 1 || s.Status == 2 || s.Status == 3);
+            var relevant = data.Quests
+                .Where(q => visibleProfiles.Any(p => IsActive(q, p)))
+                .ToList();
+
+            if (relevant.Count == 0)
+            {
+                ShowMessage("No active quests found", showRetry: false);
+                return;
+            }
+
+            // Group by map (a multi-map quest appears under each map; no maps -> "any map")
+            var groups = new Dictionary<string, List<OverviewQuest>>();
+            foreach (var quest in relevant)
+            {
+                var keys = (quest.Maps != null && quest.Maps.Count > 0) ? quest.Maps : new List<string> { AnyMapKey };
+                foreach (var key in keys)
+                {
+                    if (!groups.TryGetValue(key, out var list)) groups[key] = list = new List<OverviewQuest>();
+                    list.Add(quest);
+                }
+            }
+
+            // Sort: most players with active quests desc, then quest count desc; "any map" last
+            var ordered = groups
+                .OrderBy(g => g.Key == AnyMapKey ? 1 : 0)
+                .ThenByDescending(g => visibleProfiles.Count(p => g.Value.Any(q => IsActive(q, p))))
+                .ThenByDescending(g => g.Value.Count)
+                .ToList();
+
+            HideMessage();
+            ClearContent();
+            BuildHeaderRow(visibleProfiles);
+            foreach (var group in ordered)
+                BuildMapSection(group.Key, group.Value, visibleProfiles, IsActive);
+
+            LayoutRebuilder.ForceRebuildLayoutImmediate(_contentRt);
         }
 
         /// <summary>Show a centered message (loading / error / empty) instead of rows.</summary>
@@ -240,6 +361,134 @@ namespace SharedQuests
             _retryButton.SetActive(false);
 
             _root.SetActive(false);
+        }
+
+        /// <summary>Sticky-ish first row: blank name column + one profile name per column.</summary>
+        private void BuildHeaderRow(List<string> profiles)
+        {
+            var row = MakeRow("HeaderRow", RowH + 6f);
+            AddCell(row.transform, "", flexible: true, 12f, FontStyles.Bold, Color.clear);
+            foreach (var profile in profiles)
+            {
+                var cell = AddCell(row.transform, profile, flexible: false, 12f, FontStyles.Bold,
+                    new Color(0.8f, 0.8f, 0.8f));
+                cell.overflowMode = TextOverflowModes.Ellipsis;
+            }
+        }
+
+        private void BuildMapSection(string mapKey, List<OverviewQuest> quests,
+            List<string> profiles, Func<OverviewQuest, string, bool> isActive)
+        {
+            string displayName = mapKey == AnyMapKey
+                ? "ANY MAP"
+                : (MapNames.TryGetValue(mapKey, out var n) ? n : mapKey.ToUpperInvariant());
+            int playerCount = profiles.Count(p => quests.Any(q => isActive(q, p)));
+
+            // "Any map" starts collapsed, map sections start expanded
+            if (!_sectionExpanded.TryGetValue(mapKey, out var expanded))
+                _sectionExpanded[mapKey] = expanded = mapKey != AnyMapKey;
+
+            // Section header (click to toggle)
+            var headerGo = MakeRow($"Section_{mapKey}", SectionHeaderH);
+            headerGo.AddComponent<Image>().color = new Color(1f, 1f, 1f, 0.04f);
+            var headerLabel = MakeTMP("Label", headerGo.transform, 14f, FontStyles.Bold, TextAlignmentOptions.MidlineLeft);
+            Stretch(headerLabel.rectTransform);
+            headerLabel.rectTransform.offsetMin = new Vector2(8f, 0f);
+            string arrow = expanded ? "▼" : "▶";
+            string plural = playerCount == 1 ? "player" : "players";
+            string questPlural = quests.Count == 1 ? "quest" : "quests";
+            headerLabel.text =
+                $"<color=#9A8866>{arrow}  {displayName}</color>" +
+                $"<color=#666666>   {playerCount} {plural} · {quests.Count} {questPlural}</color>";
+
+            // Rows container so toggling is a single SetActive
+            var rowsGo = MakeRect($"Rows_{mapKey}", _contentContainer);
+            var rowsLayout = rowsGo.AddComponent<VerticalLayoutGroup>();
+            rowsLayout.childControlWidth = true;
+            rowsLayout.childControlHeight = true;
+            rowsLayout.childForceExpandWidth = true;
+            rowsLayout.childForceExpandHeight = false;
+            rowsLayout.spacing = 1f;
+            rowsGo.SetActive(expanded);
+
+            var headerBtn = headerGo.AddComponent<Button>();
+            headerBtn.transition = Selectable.Transition.None;
+            headerBtn.onClick.AddListener(() =>
+            {
+                bool now = !_sectionExpanded[mapKey];
+                _sectionExpanded[mapKey] = now;
+                rowsGo.SetActive(now);
+                headerLabel.text = headerLabel.text.Replace(now ? "▶" : "▼", now ? "▼" : "▶");
+                LayoutRebuilder.ForceRebuildLayoutImmediate(_contentRt);
+            });
+
+            foreach (var quest in quests.OrderBy(q => q.Name, StringComparer.Ordinal))
+                BuildQuestRow(rowsGo.transform, quest, profiles);
+        }
+
+        private void BuildQuestRow(Transform parent, OverviewQuest quest, List<string> profiles)
+        {
+            var row = MakeRow("Quest", RowH, parent);
+
+            string traderSuffix = string.IsNullOrEmpty(quest.Trader) ? "" : $"  <color=#555555>{quest.Trader}</color>";
+            var nameCell = AddCell(row.transform, $"<color=#CCCCCC>{quest.Name}</color>{traderSuffix}",
+                flexible: true, 12f, FontStyles.Normal, Color.white);
+            nameCell.overflowMode = TextOverflowModes.Ellipsis;
+
+            foreach (var profile in profiles)
+            {
+                OverviewProfileStatus info = null;
+                if (quest.Statuses != null) quest.Statuses.TryGetValue(profile, out info);
+                int status = info != null ? info.Status : 0;
+                // Locked with no known blocker = quest just isn't relevant to this profile yet
+                bool notRelevant = status == 0 && (info == null || string.IsNullOrEmpty(info.LockedReason));
+                var cell = AddCell(row.transform, "", flexible: false, 11f, FontStyles.Bold, Color.white);
+                cell.text = notRelevant
+                    ? "<color=#555555>–</color>"
+                    : $"<color={Plugin.GetStatusColor(status)}>{Plugin.GetStatusName(status)}</color>";
+            }
+
+            // One indented sub-row per blocked profile with a known reason
+            foreach (var profile in profiles)
+            {
+                if (quest.Statuses == null || !quest.Statuses.TryGetValue(profile, out var info)) continue;
+                if (info.Status != 0 || string.IsNullOrEmpty(info.LockedReason)) continue;
+                var subRow = MakeRow("Blocked", RowH - 6f, parent);
+                var subLabel = AddCell(subRow.transform,
+                    $"<color=#666666>└ {profile} needs: {info.LockedReason}</color>",
+                    flexible: true, 10f, FontStyles.Normal, Color.white);
+                subLabel.rectTransform.offsetMin = new Vector2(24f, 0f);
+                subLabel.overflowMode = TextOverflowModes.Ellipsis;
+            }
+        }
+
+        /// <summary>A fixed-height row with a horizontal layout, parented to content by default.</summary>
+        private GameObject MakeRow(string name, float height, Transform parent = null)
+        {
+            var go = MakeRect(name, parent ?? _contentContainer);
+            var le = go.AddComponent<LayoutElement>();
+            le.preferredHeight = height;
+            le.flexibleHeight = 0f;
+            var layout = go.AddComponent<HorizontalLayoutGroup>();
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = false;
+            layout.childForceExpandHeight = true;
+            layout.spacing = 4f;
+            return go;
+        }
+
+        private TextMeshProUGUI AddCell(Transform row, string text, bool flexible,
+            float fontSize, FontStyles style, Color color)
+        {
+            var label = MakeTMP("Cell", row, fontSize, style,
+                flexible ? TextAlignmentOptions.MidlineLeft : TextAlignmentOptions.Midline);
+            label.text = text;
+            label.color = color;
+            var le = label.gameObject.AddComponent<LayoutElement>();
+            if (flexible) { le.flexibleWidth = 1f; le.minWidth = 200f; }
+            else { le.preferredWidth = PlayerColW; le.flexibleWidth = 0f; }
+            return label;
         }
 
         // --- small builders (LootNet pattern) ---
