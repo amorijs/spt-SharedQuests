@@ -9,6 +9,10 @@ public sealed class ParsedProfile
 {
     public required string Nickname { get; init; }
     public required Dictionary<string, int> QuestStatusByQid { get; init; }
+    /// <summary>Quest id -> completed AvailableForFinish condition ids (absent when none).</summary>
+    public Dictionary<string, List<string>> CompletedConditionsByQid { get; init; } = new();
+    /// <summary>Condition id -> (owning quest id, current counter value) from TaskConditionCounters.</summary>
+    public Dictionary<string, (string SourceId, int Value)> CounterByConditionId { get; init; } = new();
 }
 
 /// <summary>
@@ -47,6 +51,7 @@ public static class ProfileParser
             if (string.IsNullOrEmpty(nickname)) return null;
 
             var byQid = new Dictionary<string, int>();
+            var completedByQid = new Dictionary<string, List<string>>();
             if (pmc.TryGetProperty("Quests", out var quests) && quests.ValueKind == JsonValueKind.Array)
             {
                 foreach (var q in quests.EnumerateArray())
@@ -64,10 +69,54 @@ public static class ProfileParser
                         status = 0; // unknown name -> Locked
 
                     byQid[qid] = status; // last write wins on duplicate qid
+
+                    if (q.TryGetProperty("completedConditions", out var ccEl) && ccEl.ValueKind == JsonValueKind.Array)
+                    {
+                        var completed = new List<string>();
+                        foreach (var c in ccEl.EnumerateArray())
+                        {
+                            if (c.ValueKind != JsonValueKind.String) continue;
+                            var cid = c.GetString();
+                            if (!string.IsNullOrEmpty(cid)) completed.Add(cid);
+                        }
+                        if (completed.Count > 0) completedByQid[qid] = completed;
+                    }
                 }
             }
 
-            return new ParsedProfile { Nickname = nickname, QuestStatusByQid = byQid };
+            var counters = new Dictionary<string, (string SourceId, int Value)>();
+            if (pmc.TryGetProperty("TaskConditionCounters", out var tcc) && tcc.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var entry in tcc.EnumerateObject())
+                {
+                    var v = entry.Value;
+                    if (v.ValueKind != JsonValueKind.Object) continue;
+
+                    var condId = v.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String
+                        ? idEl.GetString() : entry.Name;
+                    if (string.IsNullOrEmpty(condId)) condId = entry.Name;
+
+                    var sourceId = v.TryGetProperty("sourceId", out var srcEl) && srcEl.ValueKind == JsonValueKind.String
+                        ? srcEl.GetString() ?? "" : "";
+
+                    var value = 0;
+                    if (v.TryGetProperty("value", out var valEl))
+                    {
+                        if (valEl.ValueKind == JsonValueKind.Number) value = (int)valEl.GetDouble();
+                        else if (valEl.ValueKind == JsonValueKind.String && int.TryParse(valEl.GetString(), out var parsed)) value = parsed;
+                    }
+
+                    counters[condId] = (sourceId, value);
+                }
+            }
+
+            return new ParsedProfile
+            {
+                Nickname = nickname,
+                QuestStatusByQid = byQid,
+                CompletedConditionsByQid = completedByQid,
+                CounterByConditionId = counters,
+            };
         }
         catch (JsonException)
         {
