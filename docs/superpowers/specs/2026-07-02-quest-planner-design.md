@@ -53,7 +53,7 @@ New route registered in `SharedQuestsRouter` alongside `/sharedquests/statuses`.
 
 ### Relevance filter
 
-A quest is included when **at least one profile** has status in {AvailableForStart (1), Started (2), AvailableForFinish (3)}. For included quests, every profile's status is returned — including Locked (with reason) and Success — because "who's blocked / who's already done" is the point. Quests active for nobody (all Locked, all Success, etc.) are omitted.
+A quest is included when **at least one profile** has status in {AvailableForStart (1), Started (2), AvailableForFinish (3)}. For included quests, every profile's status is returned — including Locked (with reason) and Success — because "who's blocked / who's already done" is the point. Quests active for nobody (all Locked, all Success, etc.) are omitted. Included fields per quest: id, name, trader, maps, per-profile statuses (no level requirements — nothing in the UI renders them).
 
 ### Map derivation
 
@@ -103,7 +103,7 @@ Layout:
 
 - Fetch fails or returns invalid JSON → panel body shows "Couldn't reach SharedQuests server" and a Retry button.
 - Empty quest list → "No active quests found."
-- Unknown/unmappable map ids → grouped under "Any map".
+- Map ids without a display-name entry → shown under their raw id (uppercased); only quests with **no** derivable map land in "Any map".
 - Corrupt profile files are already skipped server-side.
 
 ## Testing
