@@ -157,6 +157,8 @@ namespace SharedQuests
             _contentRt.anchorMin = new Vector2(0f, 1f);
             _contentRt.anchorMax = new Vector2(1f, 1f);
             _contentRt.pivot = new Vector2(0.5f, 1f);
+            _contentRt.anchoredPosition = Vector2.zero;
+            _contentRt.sizeDelta = Vector2.zero;
             var layout = contentGo.AddComponent<VerticalLayoutGroup>();
             layout.childControlWidth = true;
             layout.childControlHeight = true;
