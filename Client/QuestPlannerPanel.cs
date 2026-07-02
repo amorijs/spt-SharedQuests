@@ -319,6 +319,9 @@ namespace SharedQuests
             var viewportGo = MakeRect("Viewport", scrollGo.transform);
             Stretch(viewportGo.GetComponent<RectTransform>());
             viewportGo.AddComponent<RectMask2D>();
+            // invisible catch-all so scroll events over any row reach the ScrollRect
+            var viewportCatcher = viewportGo.AddComponent<Image>();
+            viewportCatcher.color = Color.clear;
             _scrollRect.viewport = viewportGo.GetComponent<RectTransform>();
 
             var contentGo = MakeRect("Content", viewportGo.transform);
@@ -402,9 +405,11 @@ namespace SharedQuests
             string arrow = expanded ? "▼" : "▶";
             string plural = playerCount == 1 ? "player" : "players";
             string questPlural = quests.Count == 1 ? "quest" : "quests";
+            int sharedCount = quests.Count(q => IsSharedByAll(q, profiles));
             headerLabel.text =
                 $"<color=#9A8866>{arrow}  {displayName}</color>" +
-                $"<color=#666666>   {playerCount} {plural} · {quests.Count} {questPlural}</color>";
+                $"<color=#666666>   {playerCount} {plural} · {quests.Count} {questPlural}</color>" +
+                (sharedCount > 0 ? $"<color=#FFA500> · {sharedCount} shared</color>" : "");
 
             // Rows container so toggling is a single SetActive
             var rowsGo = MakeRect($"Rows_{mapKey}", _contentContainer);
@@ -433,12 +438,25 @@ namespace SharedQuests
                 BuildQuestRow(rowsGo.transform, quest, profiles);
         }
 
+        /// <summary>Active-for-everyone: each profile can start (1) or has started (2) the quest.</summary>
+        private static bool IsSharedByAll(OverviewQuest quest, List<string> profiles)
+        {
+            if (quest.Statuses == null) return false;
+            foreach (var profile in profiles)
+            {
+                if (!quest.Statuses.TryGetValue(profile, out var s)) return false;
+                if (s.Status != 1 && s.Status != 2) return false;
+            }
+            return profiles.Count > 0;
+        }
+
         private void BuildQuestRow(Transform parent, OverviewQuest quest, List<string> profiles)
         {
             var row = MakeRow("Quest", RowH, parent);
 
             string traderSuffix = string.IsNullOrEmpty(quest.Trader) ? "" : $"  <color=#555555>{quest.Trader}</color>";
-            var nameCell = AddCell(row.transform, $"<color=#CCCCCC>{quest.Name}</color>{traderSuffix}",
+            string nameColor = IsSharedByAll(quest, profiles) ? "#FFA500" : "#CCCCCC";
+            var nameCell = AddCell(row.transform, $"<color={nameColor}>{quest.Name}</color>{traderSuffix}",
                 flexible: true, 15f, FontStyles.Normal, Color.white);
             nameCell.overflowMode = TextOverflowModes.Ellipsis;
 
