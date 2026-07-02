@@ -226,7 +226,8 @@ namespace SharedQuests
                 data = null;
             }
 
-            if (data == null)
+            // Error/unknown-id responses ({"err":0}) deserialize to a non-null object with null Name
+            if (data == null || data.Name == null)
             {
                 ShowMessage("Couldn't load quest details", showRetry: true);
                 return;
