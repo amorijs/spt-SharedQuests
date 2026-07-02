@@ -88,9 +88,25 @@ namespace SharedQuests
         private const float PlayerColW = 130f;
         private const float RowH = 32f;
         private const float SectionHeaderH = 42f;
+        private const float FilterH = 44f;
+        private const float StickyH = 36f;
 
         // map id -> expanded state, persists across refreshes while the game runs
         private readonly Dictionary<string, bool> _sectionExpanded = new Dictionary<string, bool>();
+
+        // filter state; cached response so filtering rebuilds locally without a refetch
+        private OverviewResponse _lastData;
+        private string _search = "";
+        private bool _sharedOnly;
+        private string _traderFilter; // null = all
+        private List<string> _traders = new List<string>();
+        private TMP_InputField _searchInput;
+        private TextMeshProUGUI _traderLabel;
+        private TextMeshProUGUI _sharedLabel;
+        private Transform _stickyHeader;
+
+        private static readonly Color ButtonTextColor = new Color(0.7f, 0.7f, 0.7f);
+        private static readonly Color SharedGold = new Color(1f, 0.647f, 0f); // #FFA500
 
         private void Awake()
         {
@@ -102,6 +118,7 @@ namespace SharedQuests
         private void Update()
         {
             if (!_visible || !Input.GetKeyDown(KeyCode.Escape)) return;
+            if (_searchInput != null && _searchInput.isFocused) return; // Esc just unfocuses the search box
             if (_detail != null && _detail.IsOpen) _detail.Hide();
             else Hide();
         }
@@ -128,33 +145,41 @@ namespace SharedQuests
             _root.SetActive(false);
         }
 
-        /// <summary>Fetches overview data and rebuilds the rows.</summary>
+        /// <summary>Fetches overview data, then rebuilds the rows.</summary>
         private void RefreshContent()
         {
             ShowMessage("Loading...", showRetry: false);
 
-            OverviewResponse data;
             try
             {
                 var response = RequestHandler.GetJson("/sharedquests/overview");
-                data = JsonConvert.DeserializeObject<OverviewResponse>(response);
+                _lastData = JsonConvert.DeserializeObject<OverviewResponse>(response);
             }
             catch (Exception ex)
             {
                 Plugin.LogSource.LogError($"SharedQuests: Error fetching overview: {ex.Message}");
-                data = null;
+                _lastData = null;
             }
 
-            if (data == null || data.Profiles == null || data.Quests == null)
+            if (_lastData == null || _lastData.Profiles == null || _lastData.Quests == null)
             {
+                _lastData = null;
                 ShowMessage("Couldn't reach SharedQuests server", showRetry: true);
                 return;
             }
 
             // Keep the F12 profile checkboxes in sync
-            Settings.UpdateProfileList(data.Profiles);
+            Settings.UpdateProfileList(_lastData.Profiles);
 
-            var visibleProfiles = data.Profiles.Where(Settings.IsProfileVisible).ToList();
+            Rebuild();
+        }
+
+        /// <summary>Re-filters the cached overview and rebuilds all rows (no network).</summary>
+        private void Rebuild()
+        {
+            if (_lastData == null) return;
+
+            var visibleProfiles = _lastData.Profiles.Where(Settings.IsProfileVisible).ToList();
             if (visibleProfiles.Count == 0)
             {
                 ShowMessage("No profiles selected (check F12 menu)", showRetry: false);
@@ -165,7 +190,7 @@ namespace SharedQuests
             // for excluded profiles is hidden entirely.
             bool IsActive(OverviewQuest q, string profile) =>
                 q.Statuses != null && q.Statuses.TryGetValue(profile, out var s) && (s.Status == 1 || s.Status == 2 || s.Status == 3);
-            var relevant = data.Quests
+            var relevant = _lastData.Quests
                 .Where(q => visibleProfiles.Any(p => IsActive(q, p)))
                 .ToList();
 
@@ -175,9 +200,32 @@ namespace SharedQuests
                 return;
             }
 
+            // Trader options come from the unfiltered list so cycling never shrinks
+            _traders = relevant.Select(q => q.Trader)
+                .Where(t => !string.IsNullOrEmpty(t))
+                .Distinct()
+                .OrderBy(t => t, StringComparer.Ordinal)
+                .ToList();
+
+            bool filtersActive = _search.Length > 0 || _sharedOnly || _traderFilter != null;
+            var filtered = relevant.Where(q =>
+                    (_search.Length == 0
+                        || (q.Name != null && q.Name.IndexOf(_search, StringComparison.OrdinalIgnoreCase) >= 0)
+                        || (q.Trader != null && q.Trader.IndexOf(_search, StringComparison.OrdinalIgnoreCase) >= 0))
+                    && (_traderFilter == null || q.Trader == _traderFilter)
+                    && (!_sharedOnly || IsSharedByAll(q, visibleProfiles)))
+                .ToList();
+
+            if (filtered.Count == 0)
+            {
+                ShowMessage("No quests match the current filters", showRetry: false);
+                BuildStickyHeader(visibleProfiles);
+                return;
+            }
+
             // Group by map (a multi-map quest appears under each map; no maps -> "any map")
             var groups = new Dictionary<string, List<OverviewQuest>>();
-            foreach (var quest in relevant)
+            foreach (var quest in filtered)
             {
                 var keys = (quest.Maps != null && quest.Maps.Count > 0) ? quest.Maps : new List<string> { AnyMapKey };
                 foreach (var key in keys)
@@ -196,17 +244,19 @@ namespace SharedQuests
 
             HideMessage();
             ClearContent();
-            BuildHeaderRow(visibleProfiles);
+            BuildStickyHeader(visibleProfiles);
             foreach (var group in ordered)
-                BuildMapSection(group.Key, group.Value, visibleProfiles, IsActive);
+                BuildMapSection(group.Key, group.Value, visibleProfiles, IsActive, filtersActive);
 
             LayoutRebuilder.ForceRebuildLayoutImmediate(_contentRt);
+            if (_scrollRect != null) _scrollRect.verticalNormalizedPosition = 1f;
         }
 
         /// <summary>Show a centered message (loading / error / empty) instead of rows.</summary>
         private void ShowMessage(string text, bool showRetry)
         {
             ClearContent();
+            ClearStickyHeader();
             _messageLabel.text = text;
             _messageLabel.gameObject.SetActive(true);
             _retryButton.SetActive(showRetry);
@@ -300,14 +350,50 @@ namespace SharedQuests
             closeBtn.transition = Selectable.Transition.None;
             closeBtn.onClick.AddListener(Hide);
 
+            // Filter bar: search (stretches) + trader cycle + shared-only + clear
+            var bar = MakeRect("FilterBar", panelGo.transform);
+            SetRect(bar.GetComponent<RectTransform>(),
+                anchorMin: new Vector2(0f, 1f), anchorMax: new Vector2(1f, 1f),
+                offsetMin: new Vector2(24f, -(HeaderH + FilterH) + 6f), offsetMax: new Vector2(-24f, -HeaderH - 6f));
+            var barLayout = bar.AddComponent<HorizontalLayoutGroup>();
+            barLayout.childControlWidth = true;
+            barLayout.childControlHeight = true;
+            barLayout.childForceExpandWidth = false;
+            barLayout.childForceExpandHeight = true;
+            barLayout.spacing = 8f;
+
+            _searchInput = MakeSearchInput(bar.transform);
+            // ponytail: cycle button instead of a real TMP_Dropdown — a code-built dropdown
+            // template isn't worth it; revisit if trader count grows past ~10
+            _traderLabel = MakeFilterButton(bar.transform, "TRADER: ALL", 180f, CycleTrader);
+            _sharedLabel = MakeFilterButton(bar.transform, "SHARED ONLY", 130f, ToggleSharedOnly);
+            MakeFilterButton(bar.transform, "CLEAR", 80f, ClearFilters);
+
             var divider = MakeRect("Divider", panelGo.transform);
             var dividerRt = divider.GetComponent<RectTransform>();
             dividerRt.anchorMin = new Vector2(0f, 1f);
             dividerRt.anchorMax = new Vector2(1f, 1f);
             dividerRt.pivot = Vector2.up;
-            dividerRt.anchoredPosition = new Vector2(0f, -HeaderH);
+            dividerRt.anchoredPosition = new Vector2(0f, -(HeaderH + FilterH));
             dividerRt.sizeDelta = new Vector2(0f, 1f);
             divider.AddComponent<Image>().color = new Color(Accent.r, Accent.g, Accent.b, 0.25f);
+
+            // Sticky player-name header: fixed above the scroll viewport, mirrors row layout
+            var stickyGo = MakeRect("StickyHeader", panelGo.transform);
+            var stickyRt = stickyGo.GetComponent<RectTransform>();
+            stickyRt.anchorMin = new Vector2(0f, 1f);
+            stickyRt.anchorMax = new Vector2(1f, 1f);
+            stickyRt.pivot = Vector2.up;
+            stickyRt.anchoredPosition = new Vector2(0f, -(HeaderH + FilterH + 1f));
+            stickyRt.sizeDelta = new Vector2(0f, StickyH);
+            var stickyLayout = stickyGo.AddComponent<HorizontalLayoutGroup>();
+            stickyLayout.childControlWidth = true;
+            stickyLayout.childControlHeight = true;
+            stickyLayout.childForceExpandWidth = false;
+            stickyLayout.childForceExpandHeight = true;
+            stickyLayout.spacing = 4f;
+            stickyLayout.padding = new RectOffset(24, 24, 0, 0);
+            _stickyHeader = stickyGo.transform;
 
             // Scrollable content
             var scrollGo = MakeRect("Scroll", panelGo.transform);
@@ -315,7 +401,7 @@ namespace SharedQuests
             scrollRt.anchorMin = Vector2.zero;
             scrollRt.anchorMax = Vector2.one;
             scrollRt.offsetMin = new Vector2(0f, 12f);
-            scrollRt.offsetMax = new Vector2(0f, -(HeaderH + 1f));
+            scrollRt.offsetMax = new Vector2(0f, -(HeaderH + FilterH + 1f + StickyH));
             _scrollRect = scrollGo.AddComponent<ScrollRect>();
             _scrollRect.horizontal = false;
             _scrollRect.scrollSensitivity = 30f;
@@ -377,30 +463,120 @@ namespace SharedQuests
             _detail = new QuestDetailPanel(transform);
         }
 
-        /// <summary>Sticky-ish first row: blank name column + one profile name per column.</summary>
-        private void BuildHeaderRow(List<string> profiles)
+        /// <summary>Fills the sticky header: blank name column + one profile name per column.</summary>
+        private void BuildStickyHeader(List<string> profiles)
         {
-            var row = MakeRow("HeaderRow", RowH + 6f);
-            AddCell(row.transform, "", flexible: true, 15f, FontStyles.Bold, Color.clear);
+            ClearStickyHeader();
+            AddCell(_stickyHeader, "", flexible: true, 15f, FontStyles.Bold, Color.clear);
             foreach (var profile in profiles)
             {
-                var cell = AddCell(row.transform, profile, flexible: false, 15f, FontStyles.Bold,
+                var cell = AddCell(_stickyHeader, profile, flexible: false, 15f, FontStyles.Bold,
                     new Color(0.8f, 0.8f, 0.8f));
                 cell.overflowMode = TextOverflowModes.Ellipsis;
             }
         }
 
+        private void ClearStickyHeader()
+        {
+            if (_stickyHeader == null) return;
+            for (int i = _stickyHeader.childCount - 1; i >= 0; i--)
+                Destroy(_stickyHeader.GetChild(i).gameObject);
+        }
+
+        /// <summary>Search box: bg image + TMP_InputField with masked text area and placeholder.</summary>
+        private TMP_InputField MakeSearchInput(Transform parent)
+        {
+            var go = MakeRect("Search", parent);
+            go.AddComponent<Image>().color = new Color(1f, 1f, 1f, 0.06f);
+            go.AddComponent<LayoutElement>().flexibleWidth = 1f;
+            var input = go.AddComponent<TMP_InputField>();
+            input.transition = Selectable.Transition.None;
+
+            var area = MakeRect("TextArea", go.transform);
+            var areaRt = area.GetComponent<RectTransform>();
+            Stretch(areaRt);
+            areaRt.offsetMin = new Vector2(10f, 2f);
+            areaRt.offsetMax = new Vector2(-10f, -2f);
+            area.AddComponent<RectMask2D>();
+
+            var placeholder = MakeTMP("Placeholder", area.transform, 14f, FontStyles.Italic, TextAlignmentOptions.MidlineLeft);
+            Stretch(placeholder.rectTransform);
+            placeholder.text = "Search quests...";
+            placeholder.color = new Color(0.4f, 0.4f, 0.4f);
+
+            var text = MakeTMP("Text", area.transform, 14f, FontStyles.Normal, TextAlignmentOptions.MidlineLeft);
+            Stretch(text.rectTransform);
+            text.color = new Color(0.85f, 0.85f, 0.85f);
+
+            input.textViewport = areaRt;
+            input.textComponent = text;
+            input.placeholder = placeholder;
+            input.customCaretColor = true;
+            input.caretColor = new Color(0.85f, 0.85f, 0.85f);
+            input.selectionColor = new Color(Accent.r, Accent.g, Accent.b, 0.4f);
+            input.onValueChanged.AddListener(v => { _search = v ?? ""; Rebuild(); });
+            return input;
+        }
+
+        /// <summary>Fixed-width filter-bar button; returns the label so callers can restyle it.</summary>
+        private TextMeshProUGUI MakeFilterButton(Transform parent, string text, float width, Action onClick)
+        {
+            var go = MakeRect(text, parent);
+            go.AddComponent<Image>().color = new Color(1f, 1f, 1f, 0.06f);
+            var le = go.AddComponent<LayoutElement>();
+            le.preferredWidth = width;
+            le.flexibleWidth = 0f;
+            var label = MakeTMP("Label", go.transform, 13f, FontStyles.Bold, TextAlignmentOptions.Center);
+            Stretch(label.rectTransform);
+            label.text = text;
+            label.color = ButtonTextColor;
+            var btn = go.AddComponent<Button>();
+            btn.transition = Selectable.Transition.None;
+            btn.onClick.AddListener(() => onClick());
+            return label;
+        }
+
+        private void CycleTrader()
+        {
+            if (_traders.Count == 0) return;
+            int idx = (_traderFilter == null ? -1 : _traders.IndexOf(_traderFilter)) + 1;
+            _traderFilter = idx >= _traders.Count ? null : _traders[idx];
+            _traderLabel.text = _traderFilter == null ? "TRADER: ALL" : $"TRADER: {_traderFilter.ToUpperInvariant()}";
+            _traderLabel.color = _traderFilter == null ? ButtonTextColor : Accent;
+            Rebuild();
+        }
+
+        private void ToggleSharedOnly()
+        {
+            _sharedOnly = !_sharedOnly;
+            _sharedLabel.color = _sharedOnly ? SharedGold : ButtonTextColor;
+            Rebuild();
+        }
+
+        private void ClearFilters()
+        {
+            _search = "";
+            _searchInput.SetTextWithoutNotify("");
+            _sharedOnly = false;
+            _sharedLabel.color = ButtonTextColor;
+            _traderFilter = null;
+            _traderLabel.text = "TRADER: ALL";
+            _traderLabel.color = ButtonTextColor;
+            Rebuild();
+        }
+
         private void BuildMapSection(string mapKey, List<OverviewQuest> quests,
-            List<string> profiles, Func<OverviewQuest, string, bool> isActive)
+            List<string> profiles, Func<OverviewQuest, string, bool> isActive, bool forceExpanded)
         {
             string displayName = mapKey == AnyMapKey
                 ? "ANY MAP"
                 : (MapNames.TryGetValue(mapKey, out var n) ? n : mapKey.ToUpperInvariant());
             int playerCount = profiles.Count(p => quests.Any(q => isActive(q, p)));
 
-            // "Any map" starts collapsed, map sections start expanded
+            // Everything starts collapsed; active filters force sections open so hits are visible
             if (!_sectionExpanded.TryGetValue(mapKey, out var expanded))
-                _sectionExpanded[mapKey] = expanded = mapKey != AnyMapKey;
+                _sectionExpanded[mapKey] = expanded = false;
+            if (forceExpanded) expanded = true;
 
             // Section header (click to toggle)
             var headerGo = MakeRow($"Section_{mapKey}", SectionHeaderH);
@@ -431,7 +607,7 @@ namespace SharedQuests
             headerBtn.transition = Selectable.Transition.None;
             headerBtn.onClick.AddListener(() =>
             {
-                bool now = !_sectionExpanded[mapKey];
+                bool now = !rowsGo.activeSelf; // displayed state, not stored (filters can force open)
                 _sectionExpanded[mapKey] = now;
                 rowsGo.SetActive(now);
                 headerLabel.text = headerLabel.text.Replace(now ? "▶" : "▼", now ? "▼" : "▶");
