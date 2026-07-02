@@ -336,6 +336,9 @@ namespace SharedQuests
                         14f, Color.white);
                     if (clickable)
                     {
+                        // EFT's TMP settings disable raycastTarget on all text (set in TMP_Text.Awake),
+                        // so a Button whose only graphic is the label never sees clicks without this.
+                        label.raycastTarget = true;
                         var id = prereq.Id;
                         var btn = label.gameObject.AddComponent<Button>();
                         btn.transition = Selectable.Transition.None;
