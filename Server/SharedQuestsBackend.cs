@@ -8,6 +8,7 @@ using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Enums;
 using SPTarkov.Server.Core.Models.Spt.Mod;
 using SPTarkov.Server.Core.Models.Utils;
+using SPTarkov.Server.Core.Services;
 using SPTarkov.Server.Core.Utils;
 
 namespace SharedQuests;
@@ -74,6 +75,10 @@ public class SharedQuestsRouter : StaticRouter
             new RouteAction(
                 "/sharedquests/statuses",
                 static async (url, info, sessionId, output) => await HandleGetStatuses(sessionId)
+            ),
+            new RouteAction(
+                "/sharedquests/overview",
+                static async (url, info, sessionId, output) => await HandleGetOverview()
             )
         ];
     }
@@ -112,6 +117,24 @@ public class SharedQuestsRouter : StaticRouter
         }
     }
 
+    /// <summary>
+    /// Returns the map-grouped overview payload - reads profiles fresh from disk
+    /// </summary>
+    private static ValueTask<string> HandleGetOverview()
+    {
+        try
+        {
+            var overview = _server?.GetOverview()
+                ?? new OverviewResponse { Profiles = [], Quests = [] };
+            return new ValueTask<string>(_jsonUtil!.Serialize(overview)!);
+        }
+        catch (Exception ex)
+        {
+            _logger?.Error($"[SharedQuests] Error getting overview: {ex.Message}");
+            return new ValueTask<string>(_httpResponseUtil!.NullResponse());
+        }
+    }
+
 }
 
 /// <summary>
@@ -121,86 +144,131 @@ public class SharedQuestsRouter : StaticRouter
 public class SharedQuestsServer(
     ISptLogger<SharedQuestsServer> logger,
     SharedQuestsRouter router,
-    QuestHelper questHelper) : IOnLoad
+    QuestHelper questHelper,
+    DatabaseService databaseService) : IOnLoad
 {
     // Path to profiles directory (relative to SPT root)
     private const string ProfilesPath = "user/profiles";
-    
+
     // Cache quest prerequisites (questId -> list of prerequisite quest names)
     private Dictionary<string, List<string>> _questPrerequisites = new();
-    
+
+    // SPT-free quest metadata for the overview endpoint, built once at load
+    private List<QuestMeta> _questMetas = new();
+
+    // location mongo id -> map string id ("bigmap"), from the locations DB
+    private Dictionary<string, string> _locationIdToMapId = new();
+
     public Task OnLoad()
     {
         // Wire up the router
         router.SetServer(this);
         router.SetLogger(logger);
-        
+
         logger.Info("[SharedQuests] Initializing...");
-        
-        // Build prerequisite cache
-        BuildPrerequisiteCache();
-        
+
+        // Build quest metadata and location caches
+        BuildQuestMetaCache();
+        BuildLocationMapCache();
+
         // Test reading profiles
         var statuses = GetFreshQuestStatuses();
         logger.Success($"[SharedQuests] Found {statuses.Count} profiles with quest data");
-        logger.Info("[SharedQuests] Real-time endpoint available at /sharedquests/statuses");
-        
+        logger.Info("[SharedQuests] Endpoints available: /sharedquests/statuses, /sharedquests/overview");
+
         return Task.CompletedTask;
     }
 
     /// <summary>
-    /// Build a cache of quest prerequisites for quick lookup
+    /// One pass over quest templates: builds the SPT-free QuestMeta list for the
+    /// overview endpoint and derives the legacy name-based prerequisite cache from it.
     /// </summary>
-    private void BuildPrerequisiteCache()
+    private void BuildQuestMetaCache()
     {
         try
         {
             var allQuests = questHelper.GetQuestsFromDb();
             var questNameById = allQuests.ToDictionary(q => q.Id.ToString(), q => q.QuestName ?? q.Name ?? "Unknown");
-            
+
             foreach (var quest in allQuests)
             {
-                var prerequisites = new List<string>();
-                
-                // Check AvailableForStart conditions for Quest type
+                var prereqIds = new List<string>();
                 if (quest.Conditions?.AvailableForStart != null)
                 {
                     foreach (var condition in quest.Conditions.AvailableForStart)
                     {
-                        // Check if this is a Quest condition
                         if (condition.ConditionType == "Quest" && condition.Target != null)
                         {
-                            // Target can be a string or ListOrT<string> - extract all quest IDs
-                            var targetQuestIds = ExtractTargetStrings(condition.Target);
-                            
-                            foreach (var targetQuestId in targetQuestIds)
+                            prereqIds.AddRange(ExtractTargetStrings(condition.Target));
+                        }
+                    }
+                }
+
+                var conditionLocationIds = new List<string>();
+                if (quest.Conditions?.AvailableForFinish != null)
+                {
+                    foreach (var condition in quest.Conditions.AvailableForFinish)
+                    {
+                        if (condition.Counter?.Conditions == null) continue;
+                        foreach (var sub in condition.Counter.Conditions)
+                        {
+                            if (sub.ConditionType == "Location" && sub.Target != null)
                             {
-                                if (questNameById.TryGetValue(targetQuestId, out var prereqName))
-                                {
-                                    prerequisites.Add(prereqName);
-                                }
-                                else
-                                {
-                                    // Fallback - use the ID
-                                    prerequisites.Add(targetQuestId);
-                                }
+                                conditionLocationIds.AddRange(ExtractTargetStrings(sub.Target));
                             }
                         }
                     }
                 }
-                
-                if (prerequisites.Count > 0)
+
+                _questMetas.Add(new QuestMeta
                 {
-                    _questPrerequisites[quest.Id] = prerequisites;
-                    logger.Debug($"[SharedQuests] Quest '{quest.QuestName}' requires: {string.Join(", ", prerequisites)}");
-                }
+                    Id = quest.Id.ToString(),
+                    Name = questNameById[quest.Id.ToString()],
+                    TraderId = quest.TraderId.ToString(),
+                    LocationId = quest.Location,
+                    ConditionLocationIds = conditionLocationIds.Distinct().ToList(),
+                    PrereqQuestIds = prereqIds.Distinct().ToList(),
+                });
             }
-            
-            logger.Info($"[SharedQuests] Built prerequisite cache for {_questPrerequisites.Count} quests");
+
+            // Legacy cache for /sharedquests/statuses locked reasons
+            foreach (var meta in _questMetas)
+            {
+                if (meta.PrereqQuestIds.Count == 0) continue;
+                _questPrerequisites[meta.Id] = meta.PrereqQuestIds
+                    .Select(id => questNameById.TryGetValue(id, out var n) ? n : id)
+                    .ToList();
+            }
+
+            logger.Info($"[SharedQuests] Built quest meta cache for {_questMetas.Count} quests ({_questPrerequisites.Count} with prerequisites)");
         }
         catch (Exception ex)
         {
-            logger.Error($"[SharedQuests] Error building prerequisite cache: {ex.Message}");
+            logger.Error($"[SharedQuests] Error building quest meta cache: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Build location mongo-id -> map string id from the locations DB, so no map
+    /// ids are hardcoded. Enumerates the typed Location properties by reflection.
+    /// </summary>
+    private void BuildLocationMapCache()
+    {
+        try
+        {
+            var locations = databaseService.GetLocations();
+            foreach (var prop in locations.GetType().GetProperties())
+            {
+                if (prop.GetValue(locations) is not SPTarkov.Server.Core.Models.Eft.Common.Location location) continue;
+                var locationBase = location.Base;
+                if (locationBase?.Id == null) continue;
+                _locationIdToMapId[locationBase.IdField.ToString()] = locationBase.Id;
+            }
+            logger.Info($"[SharedQuests] Built location map cache with {_locationIdToMapId.Count} locations");
+        }
+        catch (Exception ex)
+        {
+            logger.Error($"[SharedQuests] Error building location cache: {ex.Message}");
         }
     }
 
@@ -349,7 +417,41 @@ public class SharedQuestsServer(
         {
             logger.Error($"[SharedQuests] Error reading profiles: {ex.Message}");
         }
-        
+
         return result;
+    }
+
+    /// <summary>
+    /// Assemble the overview payload: fresh profiles from disk + cached quest metadata.
+    /// </summary>
+    public OverviewResponse GetOverview()
+    {
+        var profiles = new List<ParsedProfile>();
+        try
+        {
+            if (Directory.Exists(ProfilesPath))
+            {
+                foreach (var profilePath in Directory.GetFiles(ProfilesPath, "*.json"))
+                {
+                    try
+                    {
+                        var parsed = ProfileParser.Parse(File.ReadAllText(profilePath));
+                        if (parsed == null) continue;
+                        if (parsed.Nickname.StartsWith("headless_", StringComparison.OrdinalIgnoreCase)) continue;
+                        profiles.Add(parsed);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Warning($"[SharedQuests] Error reading profile {profilePath}: {ex.Message}");
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.Error($"[SharedQuests] Error reading profiles for overview: {ex.Message}");
+        }
+
+        return OverviewBuilder.Build(_questMetas, profiles, _locationIdToMapId);
     }
 }
