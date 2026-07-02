@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <Compile Include="..\Server\ProfileParser.cs" Link="ProfileParser.cs" />
+    <Compile Include="..\Server\OverviewBuilder.cs" Link="OverviewBuilder.cs" />
   </ItemGroup>
 
   <ItemGroup>
