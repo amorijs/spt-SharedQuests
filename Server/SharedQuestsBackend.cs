@@ -8,9 +8,13 @@ using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common.Tables;
 using SPTarkov.Server.Core.Models.Enums;
 using SPTarkov.Server.Core.Models.Spt.Mod;
+using SPTarkov.Server.Core.Models.Eft.ItemEvent;
 using SPTarkov.Server.Core.Models.Utils;
+using SPTarkov.Server.Core.Routers;
 using SPTarkov.Server.Core.Services;
 using SPTarkov.Server.Core.Utils;
+using SPTarkov.Server.Core.Utils.Cloners;
+using SPTarkov.Server.Core.Utils.Logger;
 
 namespace SharedQuests;
 
@@ -194,6 +198,32 @@ public class SharedQuestsDynamicRouter : DynamicRouter
             _logger?.Error($"[SharedQuests] Error handling quest detail: {ex.Message}");
             return new ValueTask<string>(_httpResponseUtil!.NullResponse());
         }
+    }
+}
+
+/// <summary>
+/// Replaces SPT's ItemEventRouter (DI resolves the highest-TypePriority registration
+/// of a base type) to log the Action names carried in /client/game/profile/items/moving
+/// request bodies — quest turn-ins/completions arrive as QuestHandover/QuestComplete here.
+/// </summary>
+[Injectable(InjectionType = InjectionType.Singleton, TypePriority = int.MaxValue)]
+public class ActionLoggingItemEventRouter(
+    ISptLogger<ActionLoggingItemEventRouter> actionLogger,
+    ISptLogger<ItemEventRouter> logger,
+    ISptLogger<FileLogger> fileLogger,
+    JsonUtil jsonUtil,
+    ProfileHelper profileHelper,
+    ServerLocalisationService localisationService,
+    EventOutputHolder eventOutputHolder,
+    IEnumerable<ItemEventRouterDefinition> itemEventRouters,
+    ICloner cloner)
+    : ItemEventRouter(logger, fileLogger, jsonUtil, profileHelper, localisationService, eventOutputHolder, itemEventRouters, cloner)
+{
+    public override ValueTask<ItemEventRouterResponse> HandleEvents(ItemEventRouterRequest info, MongoId sessionID)
+    {
+        var actions = info.Data == null ? "(empty)" : string.Join(", ", info.Data.Select(d => d.Action));
+        actionLogger.Info($"[SharedQuests] items/moving actions: {actions}");
+        return base.HandleEvents(info, sessionID);
     }
 }
 
