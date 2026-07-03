@@ -61,6 +61,40 @@ public class QuestDetailBuilderTests
     }
 
     [Fact]
+    public void Build_QuestSuccess_MarksDoneWithoutCompletedConditions()
+    {
+        var meta = Meta(objectives: new() { new ObjectiveMeta { ConditionId = "c1", Text = "Hand over the item", Target = 1 } });
+        var alice = Profile("Alice",
+            statuses: new() { ["quest1"] = 4 },
+            counters: new() { ["c1"] = ("quest1", 1) }); // stale counter left after turn-in
+        var detail = QuestDetailBuilder.Build(meta, new[] { alice });
+        var progress = detail.Objectives[0].Progress["Alice"];
+        Assert.True(progress.Done);
+        Assert.Null(progress.Count);
+    }
+
+    [Fact]
+    public void Build_FullCounter_MarksDoneBeforePostRaidSync()
+    {
+        var meta = Meta(objectives: new() { new ObjectiveMeta { ConditionId = "c1", Text = "Hand over the item", Target = 1 } });
+        var alice = Profile("Alice", counters: new() { ["c1"] = ("quest1", 1) });
+        var detail = QuestDetailBuilder.Build(meta, new[] { alice });
+        var progress = detail.Objectives[0].Progress["Alice"];
+        Assert.True(progress.Done);
+        Assert.Null(progress.Count);
+    }
+
+    [Fact]
+    public void Build_FullCounterNullTarget_StaysCount()
+    {
+        var meta = Meta(objectives: new() { new ObjectiveMeta { ConditionId = "c1", Text = "Find the thing", Target = null } });
+        var alice = Profile("Alice", counters: new() { ["c1"] = ("quest1", 1) });
+        var detail = QuestDetailBuilder.Build(meta, new[] { alice });
+        Assert.False(detail.Objectives[0].Progress["Alice"].Done);
+        Assert.Equal(1, detail.Objectives[0].Progress["Alice"].Count);
+    }
+
+    [Fact]
     public void Build_NoData_NotDoneNullCount()
     {
         var meta = Meta(objectives: new() { new ObjectiveMeta { ConditionId = "c1", Text = "Find the thing", Target = null } });

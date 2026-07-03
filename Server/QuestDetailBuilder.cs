@@ -73,6 +73,9 @@ public sealed class QuestDetailResponse
 /// <summary>Pure assembly of the /sharedquests/quest/&lt;id&gt; payload. No SPT dependencies.</summary>
 public static class QuestDetailBuilder
 {
+    // ponytail: mirrors SPT's QuestStatusEnum.Success; duplicated to stay SPT-free.
+    private const int StatusSuccess = 4;
+
     public static QuestDetailResponse Build(QuestDetailMeta meta, IReadOnlyList<ParsedProfile> profiles)
     {
         var objectives = new List<QuestDetailObjective>();
@@ -81,12 +84,20 @@ public static class QuestDetailBuilder
             var progress = new Dictionary<string, ObjectiveProgress>();
             foreach (var profile in profiles) // last write wins on duplicate nicknames
             {
-                var done = profile.CompletedConditionsByQid.TryGetValue(meta.Id, out var completed)
-                           && completed.Contains(objective.ConditionId);
+                // completedConditions is only written by the client's post-raid sync, so it
+                // lags out-of-raid handovers; quest Success and a full counter also mean done.
+                var done = (profile.QuestStatusByQid.TryGetValue(meta.Id, out var status) && status == StatusSuccess)
+                           || (profile.CompletedConditionsByQid.TryGetValue(meta.Id, out var completed)
+                               && completed.Contains(objective.ConditionId));
                 int? count = null;
                 if (!done && profile.CounterByConditionId.TryGetValue(objective.ConditionId, out var counter)
                           && counter.SourceId == meta.Id)
-                    count = counter.Value;
+                {
+                    if (objective.Target is double target && counter.Value >= target)
+                        done = true;
+                    else
+                        count = counter.Value;
+                }
                 progress[profile.Nickname] = new ObjectiveProgress { Count = count, Done = done };
             }
             objectives.Add(new QuestDetailObjective { Text = objective.Text, Target = objective.Target, Progress = progress });
