@@ -207,16 +207,15 @@ public class SharedQuestsServer(
     SharedQuestsDynamicRouter dynamicRouter,
     QuestHelper questHelper,
     DatabaseService databaseService,
-    LocaleService localeService) : IOnLoad
+    LocaleService localeService,
+    SPTarkov.Server.Core.Servers.SaveServer saveServer,
+    JsonUtil jsonUtil) : IOnLoad
 {
     // Money item tpls: roubles, dollars, euros
     private static readonly HashSet<string> MoneyTpls =
     [
         "5449016a4bdc2d6f028b456f", "5696686a4bdc2da3298b456a", "569668774bdc2da2298b4568",
     ];
-
-    // Path to profiles directory (relative to SPT root)
-    private const string ProfilesPath = "user/profiles";
 
     // Cache quest prerequisites (questId -> list of prerequisite quest names)
     private Dictionary<string, List<string>> _questPrerequisites = new();
@@ -413,113 +412,64 @@ public class SharedQuestsServer(
     }
 
     /// <summary>
-    /// Read quest statuses directly from profile JSON files on disk
-    /// This ensures we always get the latest saved data, not cached data
+    /// Quest statuses for all profiles, from live in-memory data.
     /// </summary>
     public Dictionary<string, Dictionary<string, QuestStatusInfo>> GetFreshQuestStatuses()
     {
         var result = new Dictionary<string, Dictionary<string, QuestStatusInfo>>();
-        
-        try
+        var allQuests = questHelper.GetQuestsFromDb();
+
+        foreach (var parsed in ReadProfilesLive())
         {
-            // Get all profile files
-            if (!Directory.Exists(ProfilesPath))
+            var questStatuses = new Dictionary<string, QuestStatusInfo>();
+            foreach (var quest in allQuests)
             {
-                logger.Warning($"[SharedQuests] Profiles directory not found: {ProfilesPath}");
-                return result;
-            }
-            
-            var profileFiles = Directory.GetFiles(ProfilesPath, "*.json");
-            logger.Debug($"[SharedQuests] Found {profileFiles.Length} profile files");
-            
-            var allQuests = questHelper.GetQuestsFromDb();
-            
-            foreach (var profilePath in profileFiles)
-            {
-                try
+                int statusCode = parsed.QuestStatusByQid.TryGetValue(quest.Id, out var s) ? s : 0;
+                questStatuses[quest.Id] = new QuestStatusInfo
                 {
-                    string json;
-                    try { json = File.ReadAllText(profilePath); }
-                    catch (Exception ex)
-                    {
-                        logger.Warning($"[SharedQuests] Error reading profile {profilePath}: {ex.Message}");
-                        continue;
-                    }
-
-                    var parsed = ProfileParser.Parse(json);
-                    if (parsed == null) continue;
-
-                    var nickname = parsed.Nickname;
-
-                    // Skip headless profiles
-                    if (nickname.StartsWith("headless_", StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-
-                    var questStatuses = new Dictionary<string, QuestStatusInfo>();
-
-                    foreach (var quest in allQuests)
-                    {
-                        int statusCode = parsed.QuestStatusByQid.TryGetValue(quest.Id, out var s) ? s : 0;
-                        var lockedReason = GetLockedReason(quest.Id, statusCode);
-
-                        questStatuses[quest.Id] = new QuestStatusInfo
-                        {
-                            Status = statusCode,
-                            LockedReason = lockedReason
-                        };
-                    }
-
-                    result[nickname] = questStatuses;
-
-                    // Log a few sample statuses for debugging
-                    var samples = questStatuses.Take(3).Select(kv => $"{kv.Key.Substring(0, 8)}...={(QuestStatusEnum)kv.Value.Status}");
-                    logger.Debug($"[SharedQuests] Loaded {questStatuses.Count} quest statuses for {nickname} (samples: {string.Join(", ", samples)})");
-                }
-                catch (Exception ex)
-                {
-                    logger.Warning($"[SharedQuests] Error reading profile {profilePath}: {ex.Message}");
-                }
+                    Status = statusCode,
+                    LockedReason = GetLockedReason(quest.Id, statusCode)
+                };
             }
-        }
-        catch (Exception ex)
-        {
-            logger.Error($"[SharedQuests] Error reading profiles: {ex.Message}");
+            result[parsed.Nickname] = questStatuses;
         }
 
         return result;
     }
 
     /// <summary>
-    /// Assemble the overview payload: fresh profiles from disk + cached quest metadata.
+    /// Assemble the overview payload: live profiles + cached quest metadata.
     /// </summary>
     public OverviewResponse GetOverview()
     {
-        return OverviewBuilder.Build(_questMetas, ReadProfilesFresh(), _locationIdToMapId);
+        return OverviewBuilder.Build(_questMetas, ReadProfilesLive(), _locationIdToMapId);
     }
 
-    /// <summary>Fresh-from-disk parsed profiles, headless excluded. Never throws.</summary>
-    private List<ParsedProfile> ReadProfilesFresh()
+    /// <summary>
+    /// Parsed profiles from SPT's live in-memory store (SaveServer), headless excluded.
+    /// Disk files lag behind until SPT flushes them, so reading them showed stale quest
+    /// state right after a turn-in. Each profile is serialized with SPT's own JsonUtil —
+    /// the same shape as the on-disk files — and fed to the existing parser. Never throws.
+    /// </summary>
+    private List<ParsedProfile> ReadProfilesLive()
     {
         var profiles = new List<ParsedProfile>();
         try
         {
-            if (Directory.Exists(ProfilesPath))
+            foreach (var profile in saveServer.GetProfiles().Values)
             {
-                foreach (var profilePath in Directory.GetFiles(ProfilesPath, "*.json"))
+                try
                 {
-                    try
-                    {
-                        var parsed = ProfileParser.Parse(File.ReadAllText(profilePath));
-                        if (parsed == null) continue;
-                        if (parsed.Nickname.StartsWith("headless_", StringComparison.OrdinalIgnoreCase)) continue;
-                        profiles.Add(parsed);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.Warning($"[SharedQuests] Error reading profile {profilePath}: {ex.Message}");
-                    }
+                    var json = jsonUtil.Serialize(profile);
+                    if (json == null) continue;
+                    var parsed = ProfileParser.Parse(json);
+                    if (parsed == null) continue;
+                    if (parsed.Nickname.StartsWith("headless_", StringComparison.OrdinalIgnoreCase)) continue;
+                    profiles.Add(parsed);
+                }
+                catch (Exception ex)
+                {
+                    logger.Warning($"[SharedQuests] Error reading live profile: {ex.Message}");
                 }
             }
         }
@@ -612,6 +562,6 @@ public class SharedQuestsServer(
             Rewards = rewards,
         };
 
-        return QuestDetailBuilder.Build(detailMeta, ReadProfilesFresh());
+        return QuestDetailBuilder.Build(detailMeta, ReadProfilesLive());
     }
 }
